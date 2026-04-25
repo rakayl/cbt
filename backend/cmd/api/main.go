@@ -30,7 +30,7 @@ func main() {
 	// ── Infrastructure ───────────────────────────────────────────────────────
 	db  := infradb.NewPostgres(os.Getenv("DB_DSN"))
 	infradb.AutoMigrate(db)
-
+	infradb.Seed(db)
 	rdb := infraredis.New(os.Getenv("REDIS_ADDR"), os.Getenv("REDIS_PASSWORD"), 0)
 	if err := rdb.Ping(context.Background()); err != nil {
 		log.Fatalf("Redis connection failed: %v", err)

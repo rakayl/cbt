@@ -1,0 +1,90 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cbt_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     cbt_user
+      POSTGRES_PASSWORD: cbt_pass
+      POSTGRES_DB:       cbt_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cbt_user -d cbt_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cbt_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend (Golang) ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cbt_backend
+    restart: unless-stopped
+    environment:
+      DB_DSN:         postgres://cbt_user:cbt_pass@postgres:5432/cbt_db?sslmode=disable
+      REDIS_ADDR:     redis:6379
+      REDIS_PASSWORD: ""
+      JWT_SECRET:     super-secret-change-in-production
+      PORT:           "8080"
+      GIN_MODE:       release
+      CORS_ORIGIN:    http://localhost:5173
+      AI_SERVICE_URL: http://ai:5001
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai:
+        condition: service_started
+
+  # ── Python AI Service ───────────────────────────────────────────────────────
+  ai:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: cbt_ai
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+
+  # ── Frontend (Nginx serving built React) ────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cbt_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:

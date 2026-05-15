@@ -1,0 +1,42 @@
+name: ci-cd
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24.2', cache-dependency-path: backend/go.sum }
+      - run: gofmt -w .
+        working-directory: backend
+      - run: go test ./...
+        working-directory: backend
+      - run: go build ./cmd/api
+        working-directory: backend
+      - run: go build ./cmd/worker
+        working-directory: backend
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm ci || npm install
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+  docker:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' }
+      - run: docker build -t ghcr.io/${{ github.repository }}/backend:${{ github.sha }} ./backend
+      - run: docker build -f ./backend/Dockerfile.worker -t ghcr.io/${{ github.repository }}/worker:${{ github.sha }} ./backend
+      - run: docker build -t ghcr.io/${{ github.repository }}/frontend:${{ github.sha }} ./frontend
+      - run: docker push ghcr.io/${{ github.repository }}/backend:${{ github.sha }} && docker push ghcr.io/${{ github.repository }}/worker:${{ github.sha }} && docker push ghcr.io/${{ github.repository }}/frontend:${{ github.sha }}
+      - run: kubectl apply -f k8s/
+        env: { KUBECONFIG: '${{ secrets.KUBECONFIG }}' }

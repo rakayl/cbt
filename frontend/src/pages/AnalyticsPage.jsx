@@ -1,0 +1,1 @@
+export default function AnalyticsPage(){ return <div className="space-y-4"><h1 className="text-2xl font-bold">Analytics</h1><div className="grid-auto"><div className="panel p-5 h-64">Pass rate chart</div><div className="panel p-5 h-64">Question difficulty chart</div><div className="panel p-5 h-64">Realtime participants</div></div></div> }

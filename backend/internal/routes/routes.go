@@ -1,0 +1,90 @@
+package routes
+
+import (
+	academicperiods "github.com/cbt-ai/enterprise-cbt/internal/modules/academic_periods"
+	analytics "github.com/cbt-ai/enterprise-cbt/internal/modules/analytics"
+	answers "github.com/cbt-ai/enterprise-cbt/internal/modules/answers"
+	auditlogs "github.com/cbt-ai/enterprise-cbt/internal/modules/audit_logs"
+	auth "github.com/cbt-ai/enterprise-cbt/internal/modules/auth"
+	billing "github.com/cbt-ai/enterprise-cbt/internal/modules/billing"
+	browseractivitylogs "github.com/cbt-ai/enterprise-cbt/internal/modules/browser_activity_logs"
+	campuses "github.com/cbt-ai/enterprise-cbt/internal/modules/campuses"
+	classrooms "github.com/cbt-ai/enterprise-cbt/internal/modules/class_rooms"
+	courseclasses "github.com/cbt-ai/enterprise-cbt/internal/modules/course_classes"
+	courses "github.com/cbt-ai/enterprise-cbt/internal/modules/courses"
+	dashboard "github.com/cbt-ai/enterprise-cbt/internal/modules/dashboard"
+	enrollment "github.com/cbt-ai/enterprise-cbt/internal/modules/enrollment"
+	examquestionpools "github.com/cbt-ai/enterprise-cbt/internal/modules/exam_question_pools"
+	examsessionquestions "github.com/cbt-ai/enterprise-cbt/internal/modules/exam_session_questions"
+	examsessions "github.com/cbt-ai/enterprise-cbt/internal/modules/exam_sessions"
+	exams "github.com/cbt-ai/enterprise-cbt/internal/modules/exams"
+	facedetectionlogs "github.com/cbt-ai/enterprise-cbt/internal/modules/face_detection_logs"
+	faculties "github.com/cbt-ai/enterprise-cbt/internal/modules/faculties"
+	grading "github.com/cbt-ai/enterprise-cbt/internal/modules/grading"
+	lecturers "github.com/cbt-ai/enterprise-cbt/internal/modules/lecturers"
+	notifications "github.com/cbt-ai/enterprise-cbt/internal/modules/notifications"
+	permissions "github.com/cbt-ai/enterprise-cbt/internal/modules/permissions"
+	proctoring "github.com/cbt-ai/enterprise-cbt/internal/modules/proctoring"
+	questionbanks "github.com/cbt-ai/enterprise-cbt/internal/modules/question_banks"
+	questioncategories "github.com/cbt-ai/enterprise-cbt/internal/modules/question_categories"
+	questionoptions "github.com/cbt-ai/enterprise-cbt/internal/modules/question_options"
+	questiontagrelations "github.com/cbt-ai/enterprise-cbt/internal/modules/question_tag_relations"
+	questiontags "github.com/cbt-ai/enterprise-cbt/internal/modules/question_tags"
+	questions "github.com/cbt-ai/enterprise-cbt/internal/modules/questions"
+	reconnectlogs "github.com/cbt-ai/enterprise-cbt/internal/modules/reconnect_logs"
+	recoverylogs "github.com/cbt-ai/enterprise-cbt/internal/modules/recovery_logs"
+	reports "github.com/cbt-ai/enterprise-cbt/internal/modules/reports"
+	roles "github.com/cbt-ai/enterprise-cbt/internal/modules/roles"
+	screenrecordings "github.com/cbt-ai/enterprise-cbt/internal/modules/screen_recordings"
+	students "github.com/cbt-ai/enterprise-cbt/internal/modules/students"
+	studyprograms "github.com/cbt-ai/enterprise-cbt/internal/modules/study_programs"
+	subscriptionplans "github.com/cbt-ai/enterprise-cbt/internal/modules/subscription_plans"
+	tenants "github.com/cbt-ai/enterprise-cbt/internal/modules/tenants"
+	users "github.com/cbt-ai/enterprise-cbt/internal/modules/users"
+	"github.com/cbt-ai/enterprise-cbt/internal/shared"
+	"github.com/gofiber/fiber/v2"
+)
+
+func Register(app *fiber.App, deps shared.Deps) {
+	api := app.Group("/api/v1")
+	auth.RegisterRoutes(api, deps)
+	dashboard.RegisterRoutes(api, deps)
+	users.RegisterRoutes(api, deps)
+	roles.RegisterRoutes(api, deps)
+	permissions.RegisterRoutes(api, deps)
+	tenants.RegisterRoutes(api, deps)
+	subscriptionplans.RegisterRoutes(api, deps)
+	campuses.RegisterRoutes(api, deps)
+	faculties.RegisterRoutes(api, deps)
+	studyprograms.RegisterRoutes(api, deps)
+	academicperiods.RegisterRoutes(api, deps)
+	students.RegisterRoutes(api, deps)
+	lecturers.RegisterRoutes(api, deps)
+	courses.RegisterRoutes(api, deps)
+	classrooms.RegisterRoutes(api, deps)
+	courseclasses.RegisterRoutes(api, deps)
+	enrollment.RegisterRoutes(api, deps)
+	questioncategories.RegisterRoutes(api, deps)
+	questionbanks.RegisterRoutes(api, deps)
+	questions.RegisterRoutes(api, deps)
+	questionoptions.RegisterRoutes(api, deps)
+	questiontags.RegisterRoutes(api, deps)
+	questiontagrelations.RegisterRoutes(api, deps)
+	exams.RegisterRoutes(api, deps)
+	examquestionpools.RegisterRoutes(api, deps)
+	examsessions.RegisterRoutes(api, deps)
+	examsessionquestions.RegisterRoutes(api, deps)
+	answers.RegisterRoutes(api, deps)
+	grading.RegisterRoutes(api, deps)
+	analytics.RegisterRoutes(api, deps)
+	reports.RegisterRoutes(api, deps)
+	notifications.RegisterRoutes(api, deps)
+	proctoring.RegisterRoutes(api, deps)
+	auditlogs.RegisterRoutes(api, deps)
+	recoverylogs.RegisterRoutes(api, deps)
+	reconnectlogs.RegisterRoutes(api, deps)
+	browseractivitylogs.RegisterRoutes(api, deps)
+	facedetectionlogs.RegisterRoutes(api, deps)
+	screenrecordings.RegisterRoutes(api, deps)
+	billing.RegisterRoutes(api, deps)
+}

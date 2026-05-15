@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: ["postgres","-c","wal_level=replica","-c","max_wal_senders=10","-c","archive_mode=on","-c","archive_command=/bin/true"]
+    volumes: ["postgres_data:/var/lib/postgresql/data","./backend/migrations:/docker-entrypoint-initdb.d:ro"]
+    healthcheck: { test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"], interval: 10s, timeout: 5s, retries: 5 }
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server","--requirepass","${REDIS_PASSWORD}","--appendonly","yes"]
+    volumes: ["redis_data:/data"]
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: cbt
+      RABBITMQ_DEFAULT_PASS: ${POSTGRES_PASSWORD}
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes: ["minio_data:/data"]
+  backend:
+    build: ./backend
+    env_file: .env
+    depends_on: [postgres, redis, rabbitmq, minio]
+    deploy: { replicas: 3 }
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    env_file: .env
+    depends_on: [postgres, redis, rabbitmq]
+    deploy: { replicas: 2 }
+  frontend:
+    build: ./frontend
+    depends_on: [backend]
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80","443:443"]
+    volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
+    depends_on: [frontend, backend]
+  prometheus:
+    image: prom/prometheus:latest
+    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+  grafana:
+    image: grafana/grafana:latest
+    volumes: ["grafana_data:/var/lib/grafana","./monitoring/grafana:/etc/grafana/provisioning/dashboards:ro"]
+  loki:
+    image: grafana/loki:latest
+    command: -config.file=/etc/loki/local-config.yaml
+volumes: { postgres_data: {}, redis_data: {}, minio_data: {}, grafana_data: {} }

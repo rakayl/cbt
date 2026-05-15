@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cbt-frontend, namespace: cbt }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: cbt-frontend } }
+  template:
+    metadata: { labels: { app: cbt-frontend } }
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/example/enterprise-cbt/frontend:latest
+          ports: [{ containerPort: 80 }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }

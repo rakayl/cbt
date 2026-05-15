@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cbt-backend, namespace: cbt }
+spec:
+  replicas: 6
+  selector: { matchLabels: { app: cbt-backend } }
+  template:
+    metadata: { labels: { app: cbt-backend } }
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/example/enterprise-cbt/backend:latest
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: cbt-config }
+            - secretRef: { name: cbt-secret }
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 20, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "2", memory: 1Gi }

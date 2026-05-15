@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: cbt-postgres-backup-pvc, namespace: cbt }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 200Gi } }

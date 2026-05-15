@@ -1,0 +1,78 @@
+openapi: 3.0.3
+info:
+  title: Enterprise CBT SaaS Kampus API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: Login with email and password
+      responses:
+        "200": { description: Token pair }
+  /auth/register:
+    post:
+      security: []
+      summary: Register tenant and tenant admin
+      responses:
+        "201": { description: Tenant created }
+  /auth/refresh:
+    post:
+      security: []
+      summary: Rotate refresh token
+      responses:
+        "200": { description: Rotated token pair }
+  /exam-sessions/start:
+    post:
+      summary: Start exam session with server-side timer
+      responses:
+        "201": { description: Exam session state }
+  /exam-sessions/autosave:
+    post:
+      summary: Autosave answer delta
+      responses:
+        "200": { description: Autosave status }
+  /exam-sessions/{id}/reconnect:
+    post:
+      summary: Reconnect and recover exam session state
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Server synchronized session state }
+  /proctoring/events:
+    post:
+      summary: Ingest anti-cheat or proctoring event
+      responses:
+        "201": { description: Suspicious score result }
+  /billing/usage:
+    get:
+      summary: Get tenant subscription and quota usage
+      responses:
+        "200": { description: Usage summary }
+  /billing/checkout-intent:
+    post:
+      summary: Create payment-provider-ready checkout intent
+      responses:
+        "201": { description: Checkout intent }
+  /billing/change-plan:
+    post:
+      summary: Change tenant subscription plan
+      responses:
+        "200": { description: Updated usage summary }
+  /reports/export:
+    post:
+      summary: Export report as PDF or Excel-compatible CSV
+      responses:
+        "200": { description: Binary report file }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

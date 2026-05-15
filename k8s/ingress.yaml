@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cbt-ingress
+  namespace: cbt
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cbt.example.edu
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: cbt-backend, port: { number: 8080 } } }
+          - path: /metrics
+            pathType: Prefix
+            backend: { service: { name: cbt-backend, port: { number: 8080 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: cbt-frontend, port: { number: 80 } } }

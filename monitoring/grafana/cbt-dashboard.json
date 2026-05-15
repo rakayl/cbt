@@ -1,0 +1,1 @@
+{"title":"Enterprise CBT SaaS","timezone":"browser","panels":[{"type":"timeseries","title":"HTTP Latency","targets":[{"expr":"rate(cbt_http_request_duration_seconds_sum[5m]) / rate(cbt_http_request_duration_seconds_count[5m])"}]}],"schemaVersion":39,"version":1}

@@ -1,0 +1,18 @@
+package lecturers
+
+type CreateLecturerRequest struct {
+	Code        string         `json:"code" validate:"required,min=2,max=80"`
+	Name        string         `json:"name" validate:"required,min=2,max=160"`
+	Email       string         `json:"email" validate:"required,email"`
+	Password    string         `json:"password" validate:"required,min=8"`
+	Description string         `json:"description" validate:"max=2000"`
+	Status      string         `json:"status" validate:"omitempty,oneof=active inactive draft published completed suspended"`
+	Metadata    map[string]any `json:"metadata"`
+}
+type UpdateLecturerRequest struct {
+	Code        string         `json:"code" validate:"required,min=2,max=80"`
+	Name        string         `json:"name" validate:"required,min=2,max=160"`
+	Description string         `json:"description" validate:"max=2000"`
+	Status      string         `json:"status" validate:"omitempty,oneof=active inactive draft published completed suspended"`
+	Metadata    map[string]any `json:"metadata"`
+}

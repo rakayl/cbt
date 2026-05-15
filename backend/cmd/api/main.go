@@ -2,164 +2,102 @@ package main
 
 import (
 	"context"
-	"log"
-	"net/http"
+	"errors"
+	"fmt"
+	"github.com/cbt-ai/enterprise-cbt/internal/config"
+	"github.com/cbt-ai/enterprise-cbt/internal/database"
+	"github.com/cbt-ai/enterprise-cbt/internal/middleware"
+	"github.com/cbt-ai/enterprise-cbt/internal/pkg/logger"
+	"github.com/cbt-ai/enterprise-cbt/internal/pkg/observability"
+	"github.com/cbt-ai/enterprise-cbt/internal/pkg/rabbitmq"
+	cbtredis "github.com/cbt-ai/enterprise-cbt/internal/pkg/redis"
+	"github.com/cbt-ai/enterprise-cbt/internal/pkg/response"
+	"github.com/cbt-ai/enterprise-cbt/internal/pkg/storage"
+	"github.com/cbt-ai/enterprise-cbt/internal/routes"
+	"github.com/cbt-ai/enterprise-cbt/internal/shared"
+	"github.com/getsentry/sentry-go"
+	"github.com/gofiber/contrib/fiberzap/v2"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"cbt-enterprise/internal/delivery/http/handler"
-	"cbt-enterprise/internal/delivery/http/middleware"
-	"cbt-enterprise/internal/infrastructure/ai"
-	infradb "cbt-enterprise/internal/infrastructure/db"
-	infraqueue "cbt-enterprise/internal/infrastructure/queue"
-	infraredis "cbt-enterprise/internal/infrastructure/redis"
-	infrawsocket "cbt-enterprise/internal/infrastructure/websocket"
-	"cbt-enterprise/internal/repository"
-	"cbt-enterprise/internal/usecase"
-	"cbt-enterprise/pkg/jwt"
-
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	_ = godotenv.Load()
-
-	// ── Infrastructure ───────────────────────────────────────────────────────
-	db  := infradb.NewPostgres(os.Getenv("DB_DSN"))
-	infradb.AutoMigrate(db)
-	if os.Getenv("AUTO_SEED") == "true" {
-		infradb.Seed(db)
+	cfg := config.Load()
+	log, err := logger.New(cfg)
+	if err != nil {
+		panic(err)
 	}
-	rdb := infraredis.New(os.Getenv("REDIS_ADDR"), os.Getenv("REDIS_PASSWORD"), 0)
-	if err := rdb.Ping(context.Background()); err != nil {
-		log.Fatalf("Redis connection failed: %v", err)
+	defer func() { _ = log.Sync() }()
+	if cfg.SentryDSN != "" {
+		_ = sentry.Init(sentry.ClientOptions{Dsn: cfg.SentryDSN, Environment: cfg.AppEnv})
+		defer sentry.Flush(2 * time.Second)
 	}
-
-	jwtPkg       := jwt.New(os.Getenv("JWT_SECRET"))
-	scoringQueue := infraqueue.NewScoringQueue(rdb)
-	aiClient     := ai.NewProctoringClient(os.Getenv("AI_SERVICE_URL"))
-
-	// ── Repositories ─────────────────────────────────────────────────────────
-	userRepo      := repository.NewUserRepository(db)
-	pesertaRepo   := repository.NewPesertaRepository(db)
-	guruRepo      := repository.NewGuruRepository(db)
-	soalRepo      := repository.NewSoalRepository(db)
-	ujianRepo     := repository.NewUjianRepository(db)
-	attemptRepo   := repository.NewAttemptRepository(db)
-	penilaianRepo := repository.NewPenilaianRepository(db)
-	actLogRepo    := repository.NewActivityLogRepository(db)
-
-	// ── Usecases ─────────────────────────────────────────────────────────────
-	authUC    := usecase.NewAuthUsecase(userRepo, pesertaRepo, guruRepo, jwtPkg)
-	attemptUC := usecase.NewAttemptUsecase(attemptRepo, ujianRepo, pesertaRepo, actLogRepo, rdb, scoringQueue)
-	scoringUC := usecase.NewScoringUsecase(attemptRepo, ujianRepo, penilaianRepo, soalRepo, scoringQueue)
-	ujianUC   := usecase.NewUjianUsecase(ujianRepo, soalRepo)
-
-	// ── WebSocket hub ────────────────────────────────────────────────────────
-	hub := infrawsocket.NewHub()
-	go hub.Run()
-
-	// ── Scoring worker ───────────────────────────────────────────────────────
-	workerCtx, cancelWorker := context.WithCancel(context.Background())
-	go scoringUC.StartWorker(workerCtx)
-
-	// ── Handlers ─────────────────────────────────────────────────────────────
-	authHandler    := handler.NewAuthHandler(authUC)
-	attemptHandler := handler.NewAttemptHandler(attemptUC, hub, aiClient)
-	ujianHandler   := handler.NewUjianHandler(ujianUC)
-	soalHandler    := handler.NewSoalHandler(soalRepo)
-	adminHandler   := handler.NewAdminHandler(hub, attemptRepo, ujianRepo, penilaianRepo)
-	wsHandler      := handler.NewWSHandler(hub)
-
-	// ── Router ───────────────────────────────────────────────────────────────
-	if os.Getenv("GIN_MODE") == "release" {
-		gin.SetMode(gin.ReleaseMode)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.NewPostgresPool(ctx, cfg)
+	if err != nil {
+		log.Fatal("postgres connection failed", zap.Error(err))
 	}
-	r := gin.New()
-	r.Use(middleware.Logger(), gin.Recovery(), middleware.CORS())
-	r.Use(middleware.RateLimit(300, time.Minute))
-
-	api := r.Group("/api/v1")
-
-	// Public
-	api.POST("/auth/register", authHandler.Register)
-	api.POST("/auth/login",    authHandler.Login)
-
-	// Protected
-	p := api.Group("", middleware.JWTAuth(jwtPkg))
-
-	// Exam – peserta
-	exam := p.Group("/exam", middleware.RequireRole("peserta"))
-	exam.POST("/start",       attemptHandler.StartExam)
-	exam.POST("/answer",      attemptHandler.SaveAnswer)
-	exam.POST("/finish",      attemptHandler.FinishExam)
-	exam.POST("/violation",   attemptHandler.ReportViolation)
-	exam.POST("/proctor",     attemptHandler.ProcessFrame)
-	exam.GET("/attempt/:id",  attemptHandler.GetAttemptState)
-
-	// Soal – guru/admin
-	soal := p.Group("/soal", middleware.RequireRole("guru", "admin"))
-	soal.POST("",    soalHandler.CreateSoal)
-	soal.GET("",     soalHandler.ListSoal)
-	soal.GET("/:id", soalHandler.GetSoal)
-	soal.DELETE("/:id", soalHandler.DeleteSoal)
-
-	// Ujian – guru/admin
-	uj := p.Group("/ujian", middleware.RequireRole("guru", "admin"))
-	uj.POST("",             ujianHandler.CreateUjian)
-	uj.GET("",              ujianHandler.ListUjian)
-	uj.GET("/:id",          ujianHandler.GetUjian)
-	uj.PUT("/:id",          ujianHandler.UpdateUjian)
-	uj.POST("/:id/soal",    ujianHandler.AddSoal)
-	uj.POST("/:id/peserta", ujianHandler.AddPeserta)
-	uj.PUT("/:id/status",   ujianHandler.SetStatus)
-
-	// Admin monitoring
-	adm := p.Group("/admin", middleware.RequireRole("admin", "guru"))
-	adm.GET("/online",               adminHandler.GetOnlinePeserta)
-	adm.GET("/ujian/:id/results",    adminHandler.GetResults)
-	adm.POST("/attempt/:id/unpause", adminHandler.UnpauseAttempt)
-
-	// Peserta list (for admin/guru)
-	p.GET("/peserta", middleware.RequireRole("admin","guru"), func(c *gin.Context) {
-		list, err := pesertaRepo.ListAll(c.Request.Context())
-		if err != nil { c.JSON(500, gin.H{"error": err.Error()}); return }
-		c.JSON(200, gin.H{"success": true, "data": list})
+	defer db.Close()
+	rdb, err := cbtredis.New(ctx, cfg)
+	if err != nil {
+		log.Fatal("redis connection failed", zap.Error(err))
+	}
+	defer rdb.Close()
+	rabbit, err := rabbitmq.New(cfg.RabbitMQURL)
+	if err != nil {
+		log.Fatal("rabbitmq connection failed", zap.Error(err))
+	}
+	defer rabbit.Close()
+	minioClient, err := storage.NewMinIO(ctx, cfg)
+	if err != nil {
+		log.Fatal("object storage connection failed", zap.Error(err))
+	}
+	deps := shared.Deps{Config: cfg, DB: db, Redis: rdb, Rabbit: rabbit, Storage: minioClient, Logger: log}
+	app := fiber.New(fiber.Config{AppName: cfg.AppName, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, BodyLimit: 100 * 1024 * 1024, ErrorHandler: func(c *fiber.Ctx, err error) error {
+		code := fiber.StatusInternalServerError
+		var e *fiber.Error
+		if errors.As(err, &e) {
+			code = e.Code
+		}
+		return response.Error(c, code, err.Error(), nil)
+	}})
+	app.Use(fiberzap.New(fiberzap.Config{Logger: log}))
+	app.Use(middleware.SecureHeaders(), middleware.CORS(cfg), middleware.IPWhitelist(cfg), middleware.CSRF(), middleware.RequestSigning(cfg), middleware.Tenant(), middleware.RateLimit(cfg, rdb), observability.Middleware(), middleware.Audit(log))
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		if err := db.Ping(c.Context()); err != nil {
+			return response.Error(c, fiber.StatusServiceUnavailable, "database unavailable", nil)
+		}
+		if err := rdb.Ping(c.Context()).Err(); err != nil {
+			return response.Error(c, fiber.StatusServiceUnavailable, "redis unavailable", nil)
+		}
+		return response.OK(c, fiber.Map{"status": "ok", "service": cfg.AppName, "time": time.Now().UTC()})
 	})
-
-	// WebSocket
-	p.GET("/ws", wsHandler.ServeWS)
-
-	// ── HTTP Server ───────────────────────────────────────────────────────────
-	port := os.Getenv("PORT")
-	if port == "" { port = "8080" }
-
-	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
+	app.Get("/readyz", func(c *fiber.Ctx) error { return response.OK(c, fiber.Map{"status": "ready"}) })
+	observability.Register(app)
+	routes.Register(app, deps)
 	go func() {
-		log.Printf("🚀 CBT Server listening on :%s", port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+		if err := app.Listen(":" + cfg.AppPort); err != nil {
+			log.Fatal("api stopped", zap.Error(err))
 		}
 	}()
-
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-
-	log.Println("Shutting down…")
-	cancelWorker()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	srv.Shutdown(ctx)
-	log.Println("Server stopped")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer shutdownCancel()
+	go func() {
+		<-shutdownCtx.Done()
+		if shutdownCtx.Err() != nil {
+			log.Fatal("forced shutdown", zap.Error(shutdownCtx.Err()))
+		}
+	}()
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		log.Fatal("graceful shutdown failed", zap.Error(err))
+	}
+	fmt.Println("server stopped gracefully")
 }

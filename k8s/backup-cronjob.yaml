@@ -1,0 +1,18 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: postgres-daily-backup, namespace: cbt }
+spec:
+  schedule: "0 18 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              envFrom: [{ secretRef: { name: cbt-secret } }]
+              command: ["/bin/sh","-c"]
+              args: ["pg_dump $DATABASE_URL | gzip > /backup/cbt-$(date +%Y%m%d%H%M%S).sql.gz"]
+              volumeMounts: [{ name: backup, mountPath: /backup }]
+          volumes: [{ name: backup, persistentVolumeClaim: { claimName: cbt-postgres-backup-pvc } }]

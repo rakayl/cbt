@@ -9,8 +9,6 @@ import { useAuthStore } from '../stores/authStore';
 const initialOptions = [
   { label: 'A', text: '', is_correct: true, media: [], media_files: [] },
   { label: 'B', text: '', is_correct: false, media: [], media_files: [] },
-  { label: 'C', text: '', is_correct: false, media: [], media_files: [] },
-  { label: 'D', text: '', is_correct: false, media: [], media_files: [] },
 ];
 
 function freshInitialOptions() {
@@ -40,6 +38,7 @@ export default function QuestionsPage() {
   const [newTagName, setNewTagName] = useState('');
   const [tagLecturerId, setTagLecturerId] = useState('');
   const [questionUsage, setQuestionUsage] = useState(null);
+  const [formError, setFormError] = useState('');
 
   const banks = useQuery({
     queryKey: ['question-banks'],
@@ -64,6 +63,7 @@ export default function QuestionsPage() {
 
   const saveQuestion = useMutation({
     mutationFn: async () => {
+      setFormError('');
       const cleanQuestionText = questionText.trim();
       const payload = {
         code: editingQuestionCode || `Q-${Date.now().toString().slice(-8)}`,
@@ -130,7 +130,7 @@ export default function QuestionsPage() {
       if (canManageQuestionOwners) {
         form.append('lecturer_id', lecturerId);
       }
-      return (await api.post(`/question-banks/${questionBankId}/import`, form, { headers: { 'Content-Type': 'multipart/form-data' } })).data.data;
+      return (await api.post(`/question-banks/${questionBankId}/import`, form)).data.data;
     },
     onSuccess: (result) => {
       setImportResult(result);
@@ -200,15 +200,23 @@ export default function QuestionsPage() {
 
   async function uploadPendingMedia(savedQuestion) {
     for (const file of questionMediaFiles) {
-      await uploadQuestionMedia(savedQuestion.id, file, 'question');
+      try {
+        await uploadQuestionMedia(savedQuestion.id, file, 'question');
+      } catch (error) {
+        throw new Error(`Soal tersimpan, tetapi upload gambar soal "${file.name}" gagal: ${getApiErrorMessage(error)}`);
+      }
     }
     for (const option of options) {
       const files = option.media_files || [];
       if (!files.length) continue;
       const savedOption = savedQuestion.options?.find((item) => item.id === option.id) || savedQuestion.options?.find((item) => item.label === option.label);
-      if (!savedOption) continue;
+      if (!savedOption) throw new Error(`Soal tersimpan, tetapi opsi ${option.label} tidak ditemukan untuk upload gambar.`);
       for (const file of files) {
-        await uploadQuestionMedia(savedQuestion.id, file, 'option', savedOption.id);
+        try {
+          await uploadQuestionMedia(savedQuestion.id, file, 'option', savedOption.id);
+        } catch (error) {
+          throw new Error(`Soal tersimpan, tetapi upload gambar opsi ${option.label} "${file.name}" gagal: ${getApiErrorMessage(error)}`);
+        }
       }
     }
   }
@@ -220,7 +228,7 @@ export default function QuestionsPage() {
     if (optionId) {
       form.append('option_id', optionId);
     }
-    await api.post(`/questions/${questionId}/media`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    await api.post(`/questions/${questionId}/media`, form);
   }
 
   async function downloadTemplate() {
@@ -293,6 +301,7 @@ export default function QuestionsPage() {
     setOptions(freshInitialOptions());
     setSelectedTagIds([]);
     setQuestionUsage(null);
+    setFormError('');
   }
 
   function toggleTag(tagId) {
@@ -317,6 +326,16 @@ export default function QuestionsPage() {
     }
   }
 
+  function handleSaveQuestion() {
+    if (saveQuestion.isPending) return;
+    if (!canSave) {
+      setFormError(saveBlockedReason || 'Form soal belum lengkap.');
+      return;
+    }
+    setFormError('');
+    saveQuestion.mutate();
+  }
+
   const canSave =
     questionBankId &&
     (!canManageQuestionOwners || lecturerId) &&
@@ -324,6 +343,15 @@ export default function QuestionsPage() {
     options.length >= 2 &&
     options.every((option) => option.text.trim() || option.media?.length || option.media_files?.length) &&
     options.some((option) => option.is_correct);
+  const saveBlockedReason = getSaveBlockedReason({
+    questionBankId,
+    lecturerId,
+    canManageQuestionOwners,
+    questionText,
+    questionMedia,
+    questionMediaFiles,
+    options,
+  });
   const canImport = questionBankId && importFile && (!canManageQuestionOwners || lecturerId);
 
   return (
@@ -495,10 +523,12 @@ export default function QuestionsPage() {
                     <div className="text-sm font-extrabold text-[#181c32]">Gambar Soal</div>
                     <p className="mt-1 text-sm font-medium text-[#a1a5b7]">Bisa digunakan untuk diagram, grafik, peta, atau soal full gambar.</p>
                   </div>
-                  <label className="btn btn-ghost cursor-pointer justify-center">
-                    <Upload size={17} />
-                    Upload Gambar
-                    <input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { addQuestionMediaFiles(event.target.files); event.target.value = ''; }} />
+                  <label className="block min-w-0 sm:w-72">
+                    <span className="mb-2 flex items-center gap-2 text-sm font-extrabold text-[#009ef7]">
+                      <Upload size={17} />
+                      Upload Gambar
+                    </span>
+                    <input className="input h-11 bg-white text-sm" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { addQuestionMediaFiles(event.target.files); event.target.value = ''; }} />
                   </label>
                 </div>
                 <MediaPreviewGrid
@@ -523,7 +553,10 @@ export default function QuestionsPage() {
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-[#3f4254]">Opsi Jawaban</span>
+                  <span>
+                    <span className="block text-sm font-bold text-[#3f4254]">Opsi Jawaban</span>
+                    <span className="mt-1 block text-xs font-semibold text-[#a1a5b7]">Minimal 2 opsi. Setiap opsi boleh hanya teks, hanya gambar, atau teks dan gambar.</span>
+                  </span>
                   <button className="btn btn-ghost" onClick={addOption}>
                     <Plus size={17} />
                     Tambah Opsi
@@ -543,10 +576,12 @@ export default function QuestionsPage() {
                     <div className="md:col-span-4">
                       <div className="flex flex-col gap-2 rounded-lg bg-[#f9fafb] p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm font-bold text-[#3f4254]">Gambar opsi {option.label}</div>
-                        <label className="btn btn-ghost cursor-pointer justify-center">
-                          <Upload size={16} />
-                          Upload
-                          <input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { addOptionMediaFiles(index, event.target.files); event.target.value = ''; }} />
+                        <label className="block min-w-0 sm:w-72">
+                          <span className="mb-2 flex items-center gap-2 text-sm font-extrabold text-[#009ef7]">
+                            <Upload size={16} />
+                            Upload gambar opsi
+                          </span>
+                          <input className="input h-11 bg-white text-sm" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { addOptionMediaFiles(index, event.target.files); event.target.value = ''; }} />
                         </label>
                       </div>
                       <MediaPreviewGrid
@@ -572,10 +607,15 @@ export default function QuestionsPage() {
                 </div>
               ) : null}
 
-              <button className="btn btn-primary w-full justify-center" disabled={!canSave || saveQuestion.isPending} onClick={() => saveQuestion.mutate()}>
+              <button className="btn btn-primary w-full justify-center" disabled={saveQuestion.isPending} onClick={handleSaveQuestion}>
                 <Save size={18} />
                 {saveQuestion.isPending ? 'Menyimpan...' : editingQuestionId ? 'Update Soal' : 'Simpan Soal'}
               </button>
+              {(formError || (!canSave && saveBlockedReason)) ? (
+                <div className="rounded-lg bg-[#fff8dd] px-4 py-3 text-sm font-bold text-[#7e5b00]">
+                  {formError || saveBlockedReason}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -771,6 +811,17 @@ function LocalImage({ file }) {
   }, [file]);
 
   return <img className="h-40 w-full bg-[#f5f8fa] object-contain" src={src} alt={file.name} />;
+}
+
+function getSaveBlockedReason({ questionBankId, lecturerId, canManageQuestionOwners, questionText, questionMedia, questionMediaFiles, options }) {
+  if (!questionBankId) return 'Pilih bank soal terlebih dahulu.';
+  if (canManageQuestionOwners && !lecturerId) return 'Admin wajib memilih guru pemilik soal.';
+  if (!(questionText.trim().length >= 3 || questionMedia.length > 0 || questionMediaFiles.length > 0)) return 'Isi teks pertanyaan atau upload gambar soal.';
+  if (options.length < 2) return 'Minimal harus ada 2 opsi jawaban.';
+  const emptyOption = options.find((option) => !option.text.trim() && !(option.media?.length) && !(option.media_files?.length));
+  if (emptyOption) return `Opsi ${emptyOption.label} masih kosong. Isi teks opsi atau upload gambar opsi.`;
+  if (!options.some((option) => option.is_correct)) return 'Tandai minimal 1 opsi sebagai jawaban benar.';
+  return '';
 }
 
 function tagLabel(tag, showLecturer) {

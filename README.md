@@ -26,6 +26,36 @@ For production-style config validation you can still use:
 docker compose -f docker-compose.production.yml --env-file .env config --quiet
 ```
 
+## Frontend Web dan Desktop
+
+Web frontend tetap dibangun oleh service `frontend` dan disajikan lewat Nginx.
+
+Untuk membuat installer desktop Windows dari source frontend yang sama, atur URL API desktop di `.env`:
+
+```env
+DESKTOP_VITE_API_URL=https://cbt.example.edu/api/v1
+DESKTOP_VITE_WS_URL=wss://cbt.example.edu/api/v1
+```
+
+Lalu jalankan:
+
+```sh
+docker compose --profile desktop run --rm desktop-builder
+```
+
+Output installer akan muncul di:
+
+```text
+frontend/release
+```
+
+Untuk local development yang mengarah ke stack Docker lokal, nilai default `.env` sudah memakai:
+
+```env
+DESKTOP_VITE_API_URL=http://localhost/api/v1
+DESKTOP_VITE_WS_URL=ws://localhost/api/v1
+```
+
 ## Backend Verification
 
 ```sh

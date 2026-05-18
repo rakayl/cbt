@@ -122,6 +122,10 @@ func (s *service) StudentHistory(ctx context.Context, tenantID, userID uuid.UUID
 		if len(raw) > 0 {
 			_ = json.Unmarshal(raw, &item.Metadata)
 		}
+		if !studentResultVisible(item.Metadata) {
+			item.Score = nil
+			hideStudentResultMetadata(item.Metadata)
+		}
 		recovery := mapFromAny(item.Metadata["recovery"])
 		if item.Status == "reconnecting" && boolFromAny(recovery["timer_paused"]) {
 			item.RemainingSeconds = int64(math.Max(0, numberFromAny(recovery["remaining_seconds"])))
@@ -184,6 +188,15 @@ func (s *service) StudentResultDetail(ctx context.Context, tenantID, userID, ses
 		"answered_count":   int(numberFromMeta(out.Session.Metadata, "answered_count")),
 		"unanswered_count": int(numberFromMeta(out.Session.Metadata, "unanswered_count")),
 	}
+	if !studentResultVisible(out.Session.Metadata) {
+		hideStudentResultMetadata(out.Session.Metadata)
+		out.Summary = map[string]any{
+			"result_visible": false,
+			"message":        "Hasil ujian belum dipublish oleh guru/admin.",
+		}
+		out.Questions = []StudentResultQuestionView{}
+		return out, nil
+	}
 
 	grades, err := s.resultGradeMetadata(ctx, tenantID, sessionID)
 	if err != nil {
@@ -209,35 +222,35 @@ func (s *service) StudentResultDetail(ctx context.Context, tenantID, userID, ses
 		if err := rows.Scan(&item.SessionQuestionID, &item.QuestionID, &item.Position, &item.Code, &item.Text, &item.QuestionType, &item.AnswerMode, &rawQuestion, &rawAnswer); err != nil {
 			return StudentResultDetailResponse{}, err
 		}
-		item.AnswerPayload = map[string]any{}
-		_ = json.Unmarshal(rawAnswer, &item.AnswerPayload)
+		answerPayload := map[string]any{}
+		_ = json.Unmarshal(rawAnswer, &answerPayload)
+		item.QuestionTagID, item.QuestionTagName = questionTagFromMetadata(rawQuestion)
 		if snapshot, ok := snapshotFromMetadata(rawQuestion); ok {
 			item.QuestionID = snapshot.QuestionID
-			item.Text = snapshot.Text
 			item.QuestionType = snapshot.QuestionType
 			item.AnswerMode = snapshot.AnswerMode
-			item.Media = snapshot.Media.withURLs()
-			item.Options = snapshot.examOptions()
-			item.CorrectOptionIDs = uuidStrings(snapshot.correctOptionIDs())
 			item.MaxScore = snapshot.Score
 		}
-		item.SelectedOptionIDs = uuidStrings(uuidSliceFromAny(item.AnswerPayload["selected_option_ids"]))
-		item.Answered = len(item.SelectedOptionIDs) > 0 || strings.TrimSpace(stringFromAny(item.AnswerPayload["text"], "")) != ""
+		item.Text = ""
+		item.Media = nil
+		item.Options = nil
+		item.AnswerPayload = nil
+		item.SelectedOptionIDs = nil
+		item.CorrectOptionIDs = nil
+		item.Answered = len(uuidSliceFromAny(answerPayload["selected_option_ids"])) > 0 || strings.TrimSpace(stringFromAny(answerPayload["text"], "")) != ""
 		if gradeMeta, ok := grades[item.SessionQuestionID]; ok {
-			item.Metadata = gradeMeta
-			item.SelectedOptionIDs = resultStringSliceFromAny(gradeMeta["selected_option_ids"])
-			item.CorrectOptionIDs = resultStringSliceFromAny(gradeMeta["correct_option_ids"])
+			item.Metadata = nil
 			item.EarnedScore = numberFromAny(gradeMeta["earned_score"])
 			item.MaxScore = numberFromAny(gradeMeta["max_score"])
 			item.Answered = boolFromAny(gradeMeta["answered"])
 			item.IsCorrect = boolFromAny(gradeMeta["is_correct"])
 			item.ManualStatus = stringFromAny(gradeMeta["manual_status"], "")
-			item.Feedback = stringFromAny(gradeMeta["feedback"], "")
 		}
 		if item.MaxScore <= 0 {
 			item.MaxScore = 1
 		}
 		item.ManualRequired = item.AnswerMode != "single" && item.AnswerMode != "multiple"
+		item.QuestionID = uuid.Nil
 		out.Questions = append(out.Questions, item)
 	}
 	return out, rows.Err()
@@ -290,6 +303,32 @@ func resultStringSliceFromAny(value any) []string {
 	default:
 		return []string{}
 	}
+}
+
+func studentResultVisible(metadata map[string]any) bool {
+	policy := mapFromAny(metadata["result_policy"])
+	visibility := strings.TrimSpace(stringFromAny(policy["visibility"], "immediate"))
+	if visibility == "" {
+		visibility = "immediate"
+	}
+	switch visibility {
+	case "hidden":
+		return false
+	case "manual_release":
+		return boolFromAny(policy["released"])
+	case "after_date":
+		releaseAt := timeFromAny(policy["release_at"])
+		return !releaseAt.IsZero() && !time.Now().UTC().Before(releaseAt)
+	default:
+		return true
+	}
+}
+
+func hideStudentResultMetadata(metadata map[string]any) {
+	for _, key := range []string{"score", "max_score", "percentage", "passed", "correct_count", "wrong_count", "answered_count", "unanswered_count", "passing_grade"} {
+		delete(metadata, key)
+	}
+	metadata["result_visible"] = false
 }
 
 func (s *service) resolveStudentID(ctx context.Context, tenantID, userID uuid.UUID) (uuid.UUID, error) {

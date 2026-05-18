@@ -27,9 +27,12 @@ type Service interface {
 	Publish(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string, PublishExamRequest) (PublishExamResponse, error)
 	InviteStudents(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string, InviteStudentsRequest) ([]ExamInviteView, error)
 	ListInvites(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string) ([]ExamInviteView, error)
+	InviteRoster(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string) (ExamInviteRosterResponse, error)
+	UpdateAccessStatus(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string, UpdateExamAccessRequest) (shared.Record, error)
 	ShareCode(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string) (ShareCodeResponse, error)
 	JoinByCode(context.Context, uuid.UUID, uuid.UUID, JoinByCodeRequest) (JoinByCodeResponse, error)
 	StudentExams(context.Context, uuid.UUID, uuid.UUID, pagination.Query) (StudentExamListResult, error)
+	Rankings(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []string, pagination.Query, uuid.UUID) (ExamRankingResponse, error)
 }
 type service struct {
 	repo Repository
@@ -241,6 +244,12 @@ func (s *service) Publish(ctx context.Context, tenantID, examID, userID uuid.UUI
 		settings.QuestionCount = total
 	}
 	blueprint := s.publishBlueprintSnapshot(ctx, tenantID, examID, userID, settings)
+	if req.Metadata == nil {
+		req.Metadata = map[string]any{}
+	}
+	if normalizeAccessStatus(fmt.Sprint(req.Metadata["access_status"])) == "" {
+		req.Metadata["access_status"] = "open"
+	}
 
 	var publishedAt time.Time
 	tx, err := s.deps.DB.Begin(ctx)
@@ -390,6 +399,94 @@ func (s *service) ListInvites(ctx context.Context, tenantID, examID, userID uuid
 	return out, rows.Err()
 }
 
+func (s *service) InviteRoster(ctx context.Context, tenantID, examID, userID uuid.UUID, permissions []string) (ExamInviteRosterResponse, error) {
+	if err := s.ensureExamWritable(ctx, tenantID, examID, userID, permissions); err != nil {
+		return ExamInviteRosterResponse{}, err
+	}
+	invited, err := s.ListInvites(ctx, tenantID, examID, userID, permissions)
+	if err != nil {
+		return ExamInviteRosterResponse{}, err
+	}
+	out := ExamInviteRosterResponse{
+		ExamID:       examID,
+		AccessStatus: "open",
+		Invited:      invited,
+		InvitedCount: len(invited),
+		Uninvited:    []StudentOption{},
+	}
+	var rawMeta []byte
+	_ = s.deps.DB.QueryRow(ctx, `SELECT COALESCE(metadata,'{}'::jsonb) FROM exams WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, examID, tenantID).Scan(&rawMeta)
+	meta := map[string]any{}
+	_ = json.Unmarshal(rawMeta, &meta)
+	if status := normalizeAccessStatus(fmt.Sprint(meta["access_status"])); status != "" {
+		out.AccessStatus = status
+	}
+	rows, err := s.deps.DB.Query(ctx, `
+		SELECT s.id, s.code, s.name, s.status
+		FROM students s
+		WHERE s.tenant_id=$1
+		  AND s.deleted_at IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM exam_invites ei
+		    WHERE ei.tenant_id=s.tenant_id
+		      AND ei.exam_id=$2
+		      AND ei.student_id=s.id
+		      AND ei.deleted_at IS NULL
+		  )
+		ORDER BY s.name ASC
+		LIMIT 1000`, tenantID, examID)
+	if err != nil {
+		return ExamInviteRosterResponse{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item StudentOption
+		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.Status); err != nil {
+			return ExamInviteRosterResponse{}, err
+		}
+		out.Uninvited = append(out.Uninvited, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ExamInviteRosterResponse{}, err
+	}
+	out.UninvitedCount = len(out.Uninvited)
+	out.TotalStudent = out.InvitedCount + out.UninvitedCount
+	return out, nil
+}
+
+func (s *service) UpdateAccessStatus(ctx context.Context, tenantID, examID, userID uuid.UUID, permissions []string, req UpdateExamAccessRequest) (shared.Record, error) {
+	if err := validate.Struct(req); err != nil {
+		return shared.Record{}, err
+	}
+	accessStatus := normalizeAccessStatus(req.AccessStatus)
+	if accessStatus == "" {
+		return shared.Record{}, errors.New("access status must be open or closed")
+	}
+	if err := s.ensureExamWritable(ctx, tenantID, examID, userID, permissions); err != nil {
+		return shared.Record{}, err
+	}
+	raw, _ := json.Marshal(map[string]any{"access_status": accessStatus})
+	ct, err := s.deps.DB.Exec(ctx, `
+		UPDATE exams
+		SET metadata=COALESCE(metadata,'{}'::jsonb) || $1::jsonb,
+		    updated_at=now()
+		WHERE id=$2 AND tenant_id=$3 AND deleted_at IS NULL AND status='published'`,
+		raw, examID, tenantID)
+	if err != nil {
+		return shared.Record{}, err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.Record{}, errors.New("only published exams can be opened or closed")
+	}
+	out, err := s.repo.Get(ctx, tenantID, examID)
+	if err == nil && s.deps.Rabbit != nil {
+		body, _ := json.Marshal(map[string]any{"exam_id": examID.String(), "access_status": accessStatus})
+		_ = s.deps.Rabbit.Publish(ctx, "exams.access_status.updated", body)
+	}
+	return out, err
+}
+
 func (s *service) ShareCode(ctx context.Context, tenantID, examID, userID uuid.UUID, permissions []string) (ShareCodeResponse, error) {
 	if err := s.ensureExamWritable(ctx, tenantID, examID, userID, permissions); err != nil {
 		return ShareCodeResponse{}, err
@@ -417,8 +514,10 @@ func (s *service) JoinByCode(ctx context.Context, tenantID, userID uuid.UUID, re
 	}
 	code := strings.TrimSpace(req.Code)
 	out := JoinByCodeResponse{StudentID: studentID}
+	var accessStatus string
 	err := s.deps.DB.QueryRow(ctx, `
-		SELECT e.id, e.name, COALESCE(e.description,''), COALESCE(e.exam_token,''), ei.invitation_code, e.duration_minutes
+		SELECT e.id, e.name, COALESCE(e.description,''), COALESCE(e.exam_token,''), ei.invitation_code, e.duration_minutes,
+		       COALESCE(NULLIF(e.metadata->>'access_status',''), 'open')
 		FROM exam_invites ei
 		JOIN exams e ON e.id=ei.exam_id AND e.deleted_at IS NULL
 		WHERE ei.tenant_id=$1
@@ -426,9 +525,12 @@ func (s *service) JoinByCode(ctx context.Context, tenantID, userID uuid.UUID, re
 		  AND ei.student_id=$2
 		  AND lower(ei.invitation_code)=lower($3)
 		  AND e.status='published'
-		LIMIT 1`, tenantID, studentID, code).Scan(&out.ExamID, &out.Name, &out.Description, &out.ExamToken, &out.InvitationCode, &out.DurationMinutes)
+		LIMIT 1`, tenantID, studentID, code).Scan(&out.ExamID, &out.Name, &out.Description, &out.ExamToken, &out.InvitationCode, &out.DurationMinutes, &accessStatus)
 	if err != nil {
 		return JoinByCodeResponse{}, errors.New("kode undangan tidak valid untuk siswa ini")
+	}
+	if normalizeAccessStatus(accessStatus) == "closed" {
+		return JoinByCodeResponse{}, errors.New("ujian sedang ditutup oleh guru/admin")
 	}
 	out.Invited = true
 	_, _ = s.deps.DB.Exec(ctx, `UPDATE exam_invites SET accepted_at=COALESCE(accepted_at,now()), status='accepted', updated_at=now() WHERE tenant_id=$1 AND exam_id=$2 AND student_id=$3`, tenantID, out.ExamID, studentID)
@@ -538,6 +640,200 @@ func (s *service) StudentExams(ctx context.Context, tenantID, userID uuid.UUID, 
 	return StudentExamListResult{Items: items, Page: q.Page, Limit: q.Limit, Total: total}, rows.Err()
 }
 
+func (s *service) Rankings(ctx context.Context, tenantID, examID, userID uuid.UUID, permissions []string, q pagination.Query, classID uuid.UUID) (ExamRankingResponse, error) {
+	if q.Limit < 1 || q.Limit > 200 {
+		q.Limit = 50
+	}
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	out, err := s.rankingExamHeader(ctx, tenantID, examID, userID, permissions)
+	if err != nil {
+		return out, err
+	}
+	out.Page = q.Page
+	out.Limit = q.Limit
+
+	if err := s.populateRankingSummary(ctx, tenantID, examID, &out); err != nil {
+		return out, err
+	}
+
+	search := "%" + strings.ToLower(strings.TrimSpace(q.Search)) + "%"
+	args := []any{tenantID, examID}
+	where := "es.tenant_id=$1 AND es.exam_id=$2 AND es.deleted_at IS NULL AND es.status_enum='completed'"
+	if strings.TrimSpace(q.Search) != "" {
+		args = append(args, search)
+		where += fmt.Sprintf(" AND (lower(s.name) LIKE $%d OR lower(s.code) LIKE $%d OR lower(COALESCE(s.student_number,'')) LIKE $%d)", len(args), len(args), len(args))
+	}
+	if classID != uuid.Nil {
+		args = append(args, classID)
+		where += fmt.Sprintf(" AND active_class.class_id=$%d", len(args))
+	}
+
+	countSQL := `
+		SELECT count(*)
+		FROM exam_sessions es
+		JOIN students s ON s.id=es.student_id AND s.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+			SELECT cr.id AS class_id
+			FROM enrollment en
+			JOIN class_rooms cr ON cr.id=en.class_room_id AND cr.deleted_at IS NULL
+			WHERE en.tenant_id=es.tenant_id AND en.student_id=es.student_id AND en.deleted_at IS NULL
+			ORDER BY en.active DESC, en.enrolled_at DESC
+			LIMIT 1
+		) active_class ON true
+		WHERE ` + where
+	if err := s.deps.DB.QueryRow(ctx, countSQL, args...).Scan(&out.Total); err != nil {
+		return out, err
+	}
+
+	args = append(args, q.Limit, q.Offset())
+	rows, err := s.deps.DB.Query(ctx, `
+		WITH ranked AS (
+			SELECT
+				DENSE_RANK() OVER (
+					ORDER BY
+						CASE WHEN es.metadata->>'percentage' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (es.metadata->>'percentage')::numeric ELSE 0 END DESC,
+						EXTRACT(EPOCH FROM (COALESCE(es.submitted_at, es.updated_at) - COALESCE(es.started_at, es.created_at))) ASC,
+						es.submitted_at ASC NULLS LAST,
+						s.name ASC
+				) AS rank,
+				es.id AS session_id,
+				es.student_id,
+				s.code AS student_code,
+				s.name AS student_name,
+				active_class.class_id,
+				COALESCE(active_class.class_name,'') AS class_name,
+				CASE WHEN es.metadata->>'score' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (es.metadata->>'score')::numeric ELSE 0 END AS score,
+				CASE WHEN es.metadata->>'max_score' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (es.metadata->>'max_score')::numeric ELSE 0 END AS max_score,
+				CASE WHEN es.metadata->>'percentage' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (es.metadata->>'percentage')::numeric ELSE 0 END AS percentage,
+				CASE WHEN es.metadata->>'passing_grade' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (es.metadata->>'passing_grade')::numeric ELSE 0 END AS passing_grade,
+				COALESCE((es.metadata->>'passed')::boolean, false) AS passed,
+				CASE WHEN es.metadata->>'correct_count' ~ '^[0-9]+$' THEN (es.metadata->>'correct_count')::int ELSE 0 END AS correct_count,
+				CASE WHEN es.metadata->>'wrong_count' ~ '^[0-9]+$' THEN (es.metadata->>'wrong_count')::int ELSE 0 END AS wrong_count,
+				CASE WHEN es.metadata->>'answered_count' ~ '^[0-9]+$' THEN (es.metadata->>'answered_count')::int ELSE 0 END AS answered_count,
+				CASE WHEN es.metadata->>'unanswered_count' ~ '^[0-9]+$' THEN (es.metadata->>'unanswered_count')::int ELSE 0 END AS unanswered_count,
+				es.started_at,
+				es.submitted_at,
+				EXTRACT(EPOCH FROM (COALESCE(es.submitted_at, es.updated_at) - COALESCE(es.started_at, es.created_at)))::bigint AS duration_seconds,
+				es.attempt,
+				es.status_enum::text AS session_status
+			FROM exam_sessions es
+			JOIN students s ON s.id=es.student_id AND s.deleted_at IS NULL
+			LEFT JOIN LATERAL (
+				SELECT cr.id AS class_id, cr.name AS class_name
+				FROM enrollment en
+				JOIN class_rooms cr ON cr.id=en.class_room_id AND cr.deleted_at IS NULL
+				WHERE en.tenant_id=es.tenant_id AND en.student_id=es.student_id AND en.deleted_at IS NULL
+				ORDER BY en.active DESC, en.enrolled_at DESC
+				LIMIT 1
+			) active_class ON true
+			WHERE `+where+`
+		)
+		SELECT rank, session_id, student_id, student_code, student_name, class_id, class_name,
+		       score, max_score, percentage, passing_grade, passed, correct_count, wrong_count,
+		       answered_count, unanswered_count, started_at, submitted_at, duration_seconds, attempt, session_status
+		FROM ranked
+		ORDER BY rank ASC, percentage DESC, duration_seconds ASC, submitted_at ASC NULLS LAST, student_name ASC
+		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)),
+		args...,
+	)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	out.Items = []ExamRankingItem{}
+	for rows.Next() {
+		var item ExamRankingItem
+		err := rows.Scan(
+			&item.Rank,
+			&item.SessionID,
+			&item.StudentID,
+			&item.StudentCode,
+			&item.StudentName,
+			&item.ClassID,
+			&item.ClassName,
+			&item.Score,
+			&item.MaxScore,
+			&item.Percentage,
+			&item.PassingGrade,
+			&item.Passed,
+			&item.CorrectCount,
+			&item.WrongCount,
+			&item.AnsweredCount,
+			&item.UnansweredCount,
+			&item.StartedAt,
+			&item.SubmittedAt,
+			&item.DurationSeconds,
+			&item.Attempt,
+			&item.SessionStatus,
+		)
+		if err != nil {
+			return out, err
+		}
+		if item.DurationSeconds < 0 {
+			item.DurationSeconds = 0
+		}
+		out.Items = append(out.Items, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *service) rankingExamHeader(ctx context.Context, tenantID, examID, userID uuid.UUID, permissions []string) (ExamRankingResponse, error) {
+	var out ExamRankingResponse
+	var owner *uuid.UUID
+	err := s.deps.DB.QueryRow(ctx, `
+		SELECT id, code, name, status, owner_user_id
+		FROM exams
+		WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+		examID, tenantID,
+	).Scan(&out.ExamID, &out.ExamCode, &out.ExamName, &out.ExamStatus, &owner)
+	if err != nil {
+		return out, err
+	}
+	out.OwnerUserID = owner
+	if canManageAllExams(permissions) {
+		return out, nil
+	}
+	if owner == nil || *owner != userID {
+		return out, errors.New("exam belongs to another lecturer")
+	}
+	return out, nil
+}
+
+func (s *service) populateRankingSummary(ctx context.Context, tenantID, examID uuid.UUID, out *ExamRankingResponse) error {
+	var sessionCount int64
+	if err := s.deps.DB.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM exam_invites WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL),
+			(SELECT count(*) FROM exam_sessions WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL),
+			(SELECT count(*) FROM exam_sessions WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL AND status_enum IN ('started','reconnecting','completed')),
+			(SELECT count(*) FROM exam_sessions WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL AND status_enum='completed')`,
+		tenantID, examID,
+	).Scan(&out.InvitedCount, &sessionCount, &out.StartedCount, &out.CompletedCount); err != nil {
+		return err
+	}
+	out.ParticipantCount = out.InvitedCount
+	if sessionCount > out.ParticipantCount {
+		out.ParticipantCount = sessionCount
+	}
+	if out.InvitedCount > out.CompletedCount {
+		out.PendingCount = out.InvitedCount - out.CompletedCount
+	}
+	return s.deps.DB.QueryRow(ctx, `
+		SELECT
+			COALESCE(avg(CASE WHEN metadata->>'score' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (metadata->>'score')::numeric ELSE 0 END),0),
+			COALESCE(avg(CASE WHEN metadata->>'percentage' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (metadata->>'percentage')::numeric ELSE 0 END),0),
+			COALESCE(max(CASE WHEN metadata->>'percentage' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (metadata->>'percentage')::numeric ELSE 0 END),0),
+			COALESCE(min(CASE WHEN metadata->>'percentage' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (metadata->>'percentage')::numeric ELSE 0 END),0),
+			COALESCE(count(*) FILTER (WHERE COALESCE((metadata->>'passed')::boolean, false)),0),
+			COALESCE(count(*) FILTER (WHERE NOT COALESCE((metadata->>'passed')::boolean, false)),0)
+		FROM exam_sessions
+		WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL AND status_enum='completed'`,
+		tenantID, examID,
+	).Scan(&out.AverageScore, &out.AveragePercent, &out.HighestPercent, &out.LowestPercent, &out.PassCount, &out.FailCount)
+}
+
 func (s *service) resolveStudentID(ctx context.Context, tenantID, userID uuid.UUID) (uuid.UUID, error) {
 	var studentID uuid.UUID
 	err := s.deps.DB.QueryRow(ctx, `SELECT id FROM students WHERE tenant_id=$1 AND user_id=$2 AND deleted_at IS NULL LIMIT 1`, tenantID, userID).Scan(&studentID)
@@ -548,16 +844,18 @@ func (s *service) resolveStudentID(ctx context.Context, tenantID, userID uuid.UU
 }
 
 type examSettings struct {
-	CourseClassID   *uuid.UUID
-	DurationMinutes int
-	PassingGrade    float64
-	ExamToken       string
-	RandomQuestion  bool
-	RandomOption    bool
-	QuestionCount   int
-	QuestionPools   []QuestionPoolRequest
-	MaxAttempt      int
-	Instruction     string
+	CourseClassID    *uuid.UUID
+	DurationMinutes  int
+	PassingGrade     float64
+	ExamToken        string
+	RandomQuestion   bool
+	RandomOption     bool
+	QuestionCount    int
+	QuestionPools    []QuestionPoolRequest
+	MaxAttempt       int
+	Instruction      string
+	ResultVisibility string
+	ResultReleaseAt  string
 }
 
 func settingsFromCreate(req CreateExamRequest) examSettings {
@@ -620,10 +918,19 @@ func settingsFromPublish(req PublishExamRequest, current examSettings) examSetti
 	if strings.TrimSpace(req.Instruction) != "" {
 		out.Instruction = req.Instruction
 	}
+	if strings.TrimSpace(req.ResultVisibility) != "" {
+		out.ResultVisibility = strings.TrimSpace(req.ResultVisibility)
+	}
+	if strings.TrimSpace(req.ResultReleaseAt) != "" {
+		out.ResultReleaseAt = strings.TrimSpace(req.ResultReleaseAt)
+	}
 	out.DurationMinutes = defaultInt(out.DurationMinutes, 120)
 	out.PassingGrade = defaultFloat(out.PassingGrade, 60)
 	out.QuestionCount = defaultInt(out.QuestionCount, 40)
 	out.MaxAttempt = defaultInt(out.MaxAttempt, 1)
+	if out.ResultVisibility == "" {
+		out.ResultVisibility = "immediate"
+	}
 	return out
 }
 
@@ -664,6 +971,16 @@ func (s *service) currentExamSettings(ctx context.Context, tenantID, examID uuid
 		return out, err
 	}
 	out.QuestionPools = pools
+	var rawMeta []byte
+	_ = s.deps.DB.QueryRow(ctx, `SELECT COALESCE(metadata,'{}'::jsonb) FROM exams WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, examID, tenantID).Scan(&rawMeta)
+	meta := map[string]any{}
+	_ = json.Unmarshal(rawMeta, &meta)
+	policy := mapFromAny(meta["result_policy"])
+	out.ResultVisibility = strings.TrimSpace(fmt.Sprint(policy["visibility"]))
+	out.ResultReleaseAt = strings.TrimSpace(fmt.Sprint(policy["release_at"]))
+	if out.ResultVisibility == "" || out.ResultVisibility == "<nil>" {
+		out.ResultVisibility = "immediate"
+	}
 	return out, nil
 }
 
@@ -905,6 +1222,11 @@ func examSettingsMetadata(settings examSettings) map[string]any {
 		"question_count":   settings.QuestionCount,
 		"max_attempt":      settings.MaxAttempt,
 		"instruction":      settings.Instruction,
+		"result_policy": map[string]any{
+			"visibility":           defaultString(settings.ResultVisibility, "immediate"),
+			"release_at":           settings.ResultReleaseAt,
+			"show_question_detail": false,
+		},
 	}
 	if settings.CourseClassID != nil {
 		out["course_class_id"] = settings.CourseClassID.String()
@@ -920,6 +1242,17 @@ func examSettingsMetadata(settings examSettings) map[string]any {
 		out["question_pools"] = pools
 	}
 	return out
+}
+
+func normalizeAccessStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "open":
+		return "open"
+	case "closed", "close":
+		return "closed"
+	default:
+		return ""
+	}
 }
 
 func mustJSON(value any) string {
@@ -939,6 +1272,21 @@ func defaultFloat(value, fallback float64) float64 {
 		return value
 	}
 	return fallback
+}
+
+func defaultString(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func mapFromAny(value any) map[string]any {
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return map[string]any{}
 }
 
 func defaultBool(value *bool, fallback bool) bool {

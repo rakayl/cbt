@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, CheckCircle2, RefreshCcw, XCircle } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
@@ -16,8 +16,14 @@ export default function StudentResultDetailPage() {
   const summary = result.data?.summary || session.metadata || {};
   const questions = result.data?.questions || [];
   const passed = Boolean(summary.passed);
+  const resultVisible = summary.result_visible !== false;
 
-  const stats = useMemo(() => [
+  const stats = useMemo(() => summary.result_visible === false ? [
+    ['Status', 'Belum dirilis'],
+    ['Skor', '-'],
+    ['Persentase', '-'],
+    ['Detail', 'Terkunci'],
+  ] : [
     ['Skor', `${formatNumber(summary.score)} / ${formatNumber(summary.max_score)}`],
     ['Persentase', `${formatNumber(summary.percentage)}%`],
     ['Benar', formatNumber(summary.correct_count)],
@@ -35,7 +41,7 @@ export default function StudentResultDetailPage() {
           <div className="mt-4 text-sm font-bold text-[#a1a5b7]">Detail Hasil Ujian</div>
           <h2 className="mt-1 text-2xl font-extrabold text-[#181c32]">{session.exam_name || 'Hasil Ujian'}</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#7e8299]">
-            Review nilai, jawaban siswa, kunci jawaban, dan detail penilaian dari snapshot soal saat ujian berlangsung.
+            Review ringkasan nilai dan status penilaian. Isi soal, opsi jawaban, jawaban siswa, dan kunci tidak ditampilkan untuk mencegah kebocoran bank soal.
           </p>
         </div>
         <button className="btn btn-ghost justify-center" onClick={() => result.refetch()}>
@@ -84,14 +90,21 @@ export default function StudentResultDetailPage() {
             </div>
           </section>
 
-          <section className="space-y-4">
+          {!resultVisible ? (
+            <section className="panel p-8 text-center">
+              <div className="text-lg font-extrabold text-[#181c32]">Hasil belum dipublish</div>
+              <p className="mt-2 text-sm font-semibold text-[#7e8299]">{summary.message || 'Nilai akan tampil setelah dirilis oleh guru/admin.'}</p>
+            </section>
+          ) : null}
+
+          {resultVisible ? <section className="space-y-4">
             {questions.map((question) => (
               <QuestionResult key={question.session_question_id} question={question} />
             ))}
             {questions.length === 0 ? (
               <div className="panel p-10 text-center font-semibold text-[#7e8299]">Belum ada detail soal untuk sesi ini.</div>
             ) : null}
-          </section>
+          </section> : null}
         </>
       ) : null}
     </div>
@@ -99,8 +112,6 @@ export default function StudentResultDetailPage() {
 }
 
 function QuestionResult({ question }) {
-  const selected = new Set(question.selected_option_ids || []);
-  const correct = new Set(question.correct_option_ids || []);
   const manual = question.manual_required;
   const status = manual ? 'manual' : question.answered ? (question.is_correct ? 'correct' : 'wrong') : 'empty';
   const statusClass = {
@@ -114,8 +125,11 @@ function QuestionResult({ question }) {
     <article className="panel overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-[#eff2f5] p-5 md:flex-row md:items-start md:justify-between">
         <div>
-          <div className="text-xs font-bold uppercase text-[#a1a5b7]">Soal {question.position} · {question.answer_mode}</div>
-          <h3 className="mt-2 whitespace-pre-wrap text-base font-extrabold leading-7 text-[#181c32]">{question.text || '-'}</h3>
+          <div className="text-xs font-bold uppercase text-[#a1a5b7]">
+            Soal {question.position}
+            {question.question_tag_name ? ` -- ${question.question_tag_name}` : ''}
+          </div>
+          <h3 className="mt-2 text-base font-extrabold leading-7 text-[#181c32]">Detail soal disembunyikan untuk keamanan bank soal.</h3>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-extrabold ${statusClass}`}>{statusLabel(status)}</span>
@@ -126,38 +140,20 @@ function QuestionResult({ question }) {
       </div>
 
       <div className="p-5">
-        <ResultMediaGrid media={question.media || []} />
-        {question.options?.length ? (
-          <div className="mt-4 grid gap-3">
-            {question.options.map((option) => {
-              const isSelected = selected.has(option.id);
-              const isCorrect = correct.has(option.id);
-              return (
-                <div key={option.id} className={optionClass(isSelected, isCorrect)}>
-                  <div className={optionLabelClass(isSelected, isCorrect)}>{option.label}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold text-[#181c32]">{option.text || '-'}</div>
-                    <ResultMediaGrid media={option.media || []} compact />
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-xs font-extrabold">
-                    {isSelected ? <span className="rounded-md bg-[#f1faff] px-2 py-1 text-[#009ef7]">Dipilih</span> : null}
-                    {isCorrect ? <span className="rounded-md bg-[#e8fff3] px-2 py-1 text-[#50cd89]">Kunci</span> : null}
-                  </div>
-                </div>
-              );
-            })}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg bg-[#f5f8fa] p-4">
+            <div className="text-xs font-bold uppercase text-[#a1a5b7]">Status Jawaban</div>
+            <div className="mt-1 text-sm font-extrabold text-[#181c32]">{question.answered ? 'Terjawab' : 'Kosong'}</div>
           </div>
-        ) : (
-          <div className="mt-4 rounded-lg border border-[#eff2f5] bg-[#f5f8fa] p-4">
-            <div className="text-xs font-bold uppercase text-[#a1a5b7]">Jawaban</div>
-            <div className="mt-2 whitespace-pre-wrap text-sm font-semibold text-[#181c32]">{question.answer_payload?.text || '-'}</div>
+          <div className="rounded-lg bg-[#f5f8fa] p-4">
+            <div className="text-xs font-bold uppercase text-[#a1a5b7]">Jenis Soal</div>
+            <div className="mt-1 text-sm font-extrabold text-[#181c32]">{question.question_tag_name || '-'}</div>
           </div>
-        )}
-        {question.feedback ? (
-          <div className="mt-4 rounded-lg bg-[#f1faff] p-4 text-sm font-semibold text-[#3f4254]">
-            Feedback: {question.feedback}
+          <div className="rounded-lg bg-[#f5f8fa] p-4">
+            <div className="text-xs font-bold uppercase text-[#a1a5b7]">Mode</div>
+            <div className="mt-1 text-sm font-extrabold capitalize text-[#181c32]">{question.answer_mode || '-'}</div>
           </div>
-        ) : null}
+        </div>
       </div>
     </article>
   );
@@ -186,59 +182,6 @@ function statusLabel(status) {
   if (status === 'wrong') return 'Salah';
   if (status === 'manual') return 'Butuh Review';
   return 'Kosong';
-}
-
-function optionClass(selected, correct) {
-  if (selected && correct) return 'flex gap-3 rounded-lg border border-[#50cd89] bg-[#e8fff3] p-4';
-  if (selected && !correct) return 'flex gap-3 rounded-lg border border-[#f1416c] bg-[#fff5f8] p-4';
-  if (correct) return 'flex gap-3 rounded-lg border border-[#50cd89] bg-white p-4';
-  return 'flex gap-3 rounded-lg border border-[#eff2f5] bg-white p-4';
-}
-
-function optionLabelClass(selected, correct) {
-  if (selected && correct) return 'grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#50cd89] font-extrabold text-white';
-  if (selected && !correct) return 'grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#f1416c] font-extrabold text-white';
-  if (correct) return 'grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#e8fff3] font-extrabold text-[#50cd89]';
-  return 'grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#f5f8fa] font-extrabold text-[#5e6278]';
-}
-
-function ResultMediaGrid({ media = [], compact = false }) {
-  if (!media.length) return null;
-  return (
-    <div className={compact ? 'mt-3 grid gap-2 sm:grid-cols-2' : 'mt-4 grid gap-3 md:grid-cols-2'}>
-      {media.map((item) => (
-        <ResultImage key={item.id} media={item} compact={compact} />
-      ))}
-    </div>
-  );
-}
-
-function ResultImage({ media, compact }) {
-  const [src, setSrc] = useState('');
-  useEffect(() => {
-    let active = true;
-    let objectUrl = '';
-    api.get(media.url, { responseType: 'blob' }).then((response) => {
-      if (!active) return;
-      objectUrl = URL.createObjectURL(response.data);
-      setSrc(objectUrl);
-    }).catch(() => {
-      if (active) setSrc('');
-    });
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [media.url]);
-
-  if (!src) {
-    return <div className={compact ? 'grid h-24 place-items-center rounded-lg bg-[#f5f8fa] text-xs text-[#a1a5b7]' : 'grid h-48 place-items-center rounded-lg bg-[#f5f8fa] text-sm text-[#a1a5b7]'}>Memuat gambar...</div>;
-  }
-  return (
-    <a href={src} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-[#eff2f5] bg-[#f5f8fa]">
-      <img className={compact ? 'h-28 w-full object-contain' : 'h-64 w-full object-contain'} src={src} alt="Media hasil ujian" />
-    </a>
-  );
 }
 
 function formatNumber(value) {

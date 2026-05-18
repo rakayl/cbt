@@ -40,17 +40,23 @@ type UpdateExamRequest struct {
 }
 
 type PublishExamRequest struct {
-	DurationMinutes int                   `json:"duration_minutes" validate:"omitempty,gte=1,lte=1440"`
-	PassingGrade    float64               `json:"passing_grade" validate:"omitempty,gte=0,lte=100"`
-	ExamToken       string                `json:"exam_token" validate:"omitempty,min=4,max=64"`
-	Instruction     string                `json:"instruction" validate:"max=5000"`
-	RandomQuestion  *bool                 `json:"random_question"`
-	RandomOption    *bool                 `json:"random_option"`
-	QuestionCount   int                   `json:"question_count" validate:"omitempty,gte=1,lte=500"`
-	QuestionPools   []QuestionPoolRequest `json:"question_pools" validate:"omitempty,dive"`
-	MaxAttempt      int                   `json:"max_attempt" validate:"omitempty,gte=1,lte=20"`
-	CourseClassID   *uuid.UUID            `json:"course_class_id"`
-	Metadata        map[string]any        `json:"metadata"`
+	DurationMinutes  int                   `json:"duration_minutes" validate:"omitempty,gte=1,lte=1440"`
+	PassingGrade     float64               `json:"passing_grade" validate:"omitempty,gte=0,lte=100"`
+	ExamToken        string                `json:"exam_token" validate:"omitempty,min=4,max=64"`
+	Instruction      string                `json:"instruction" validate:"max=5000"`
+	RandomQuestion   *bool                 `json:"random_question"`
+	RandomOption     *bool                 `json:"random_option"`
+	QuestionCount    int                   `json:"question_count" validate:"omitempty,gte=1,lte=500"`
+	QuestionPools    []QuestionPoolRequest `json:"question_pools" validate:"omitempty,dive"`
+	MaxAttempt       int                   `json:"max_attempt" validate:"omitempty,gte=1,lte=20"`
+	CourseClassID    *uuid.UUID            `json:"course_class_id"`
+	ResultVisibility string                `json:"result_visibility" validate:"omitempty,oneof=immediate hidden manual_release after_date"`
+	ResultReleaseAt  string                `json:"result_release_at"`
+	Metadata         map[string]any        `json:"metadata"`
+}
+
+type UpdateExamAccessRequest struct {
+	AccessStatus string `json:"access_status" validate:"required,oneof=open closed"`
 }
 
 type QuestionPoolRequest struct {
@@ -112,6 +118,23 @@ type ExamInviteView struct {
 	Status         string    `json:"status"`
 }
 
+type ExamInviteRosterResponse struct {
+	ExamID         uuid.UUID        `json:"exam_id"`
+	AccessStatus   string           `json:"access_status"`
+	Invited        []ExamInviteView `json:"invited"`
+	Uninvited      []StudentOption  `json:"uninvited"`
+	InvitedCount   int              `json:"invited_count"`
+	UninvitedCount int              `json:"uninvited_count"`
+	TotalStudent   int              `json:"total_student"`
+}
+
+type StudentOption struct {
+	ID     uuid.UUID `json:"id"`
+	Code   string    `json:"code"`
+	Name   string    `json:"name"`
+	Status string    `json:"status"`
+}
+
 type ShareCodeResponse struct {
 	ExamID uuid.UUID `json:"exam_id"`
 	Code   string    `json:"code"`
@@ -153,4 +176,51 @@ type StudentExamView struct {
 	EndsAt          *time.Time     `json:"ends_at,omitempty"`
 	SubmittedAt     *time.Time     `json:"submitted_at,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
+}
+
+type ExamRankingItem struct {
+	Rank            int        `json:"rank"`
+	SessionID       uuid.UUID  `json:"session_id"`
+	StudentID       uuid.UUID  `json:"student_id"`
+	StudentCode     string     `json:"student_code"`
+	StudentName     string     `json:"student_name"`
+	ClassID         *uuid.UUID `json:"class_id,omitempty"`
+	ClassName       string     `json:"class_name,omitempty"`
+	Score           float64    `json:"score"`
+	MaxScore        float64    `json:"max_score"`
+	Percentage      float64    `json:"percentage"`
+	PassingGrade    float64    `json:"passing_grade"`
+	Passed          bool       `json:"passed"`
+	CorrectCount    int        `json:"correct_count"`
+	WrongCount      int        `json:"wrong_count"`
+	AnsweredCount   int        `json:"answered_count"`
+	UnansweredCount int        `json:"unanswered_count"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	SubmittedAt     *time.Time `json:"submitted_at,omitempty"`
+	DurationSeconds int64      `json:"duration_seconds"`
+	Attempt         int        `json:"attempt"`
+	SessionStatus   string     `json:"session_status"`
+}
+
+type ExamRankingResponse struct {
+	ExamID           uuid.UUID         `json:"exam_id"`
+	ExamCode         string            `json:"exam_code"`
+	ExamName         string            `json:"exam_name"`
+	ExamStatus       string            `json:"exam_status"`
+	OwnerUserID      *uuid.UUID        `json:"owner_user_id,omitempty"`
+	ParticipantCount int64             `json:"participant_count"`
+	InvitedCount     int64             `json:"invited_count"`
+	StartedCount     int64             `json:"started_count"`
+	CompletedCount   int64             `json:"completed_count"`
+	PendingCount     int64             `json:"pending_count"`
+	AverageScore     float64           `json:"average_score"`
+	AveragePercent   float64           `json:"average_percentage"`
+	HighestPercent   float64           `json:"highest_percentage"`
+	LowestPercent    float64           `json:"lowest_percentage"`
+	PassCount        int64             `json:"pass_count"`
+	FailCount        int64             `json:"fail_count"`
+	Items            []ExamRankingItem `json:"items"`
+	Page             int               `json:"page"`
+	Limit            int               `json:"limit"`
+	Total            int64             `json:"total"`
 }

@@ -39,6 +39,18 @@ services:
   frontend:
     build: ./frontend
     depends_on: [backend]
+  desktop-builder:
+    profiles: ["desktop"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.desktop
+    environment:
+      VITE_APP_PLATFORM: desktop
+      VITE_APP_NAME: ${DESKTOP_APP_NAME}
+      VITE_API_URL: ${DESKTOP_VITE_API_URL}
+      VITE_WS_URL: ${DESKTOP_VITE_WS_URL}
+    volumes:
+      - ./frontend/release:/app/release
   nginx:
     image: nginx:1.27-alpine
     ports: ["80:80","443:443"]

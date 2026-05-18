@@ -79,6 +79,47 @@ func (h Handler) SessionGrades(c *fiber.Ctx) error {
 	return response.OK(c, out)
 }
 
+func (h Handler) ReviewSessions(c *fiber.Ctx) error {
+	q := pagination.New(c.Query("page"), c.Query("limit"), c.Query("search"), c.Query("sort"))
+	var examID uuid.UUID
+	if raw := c.Query("exam_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return response.Error(c, fiber.StatusBadRequest, "invalid exam id", nil)
+		}
+		examID = parsed
+	}
+	out, err := h.service.ReviewSessions(c.Context(), shared.TenantID(c), shared.UserID(c), shared.Permissions(c), q, examID)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot load review sessions", err)
+	}
+	return response.OK(c, out)
+}
+
+func (h Handler) ReviewSessionDetail(c *fiber.Ctx) error {
+	sessionID, err := uuid.Parse(c.Params("session_id"))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid session id", nil)
+	}
+	out, err := h.service.ReviewSessionDetail(c.Context(), shared.TenantID(c), shared.UserID(c), shared.Permissions(c), sessionID)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot load review detail", err)
+	}
+	return response.OK(c, out)
+}
+
+func (h Handler) ReleaseSessionResult(c *fiber.Ctx) error {
+	sessionID, err := uuid.Parse(c.Params("session_id"))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid session id", nil)
+	}
+	out, err := h.service.ReleaseSessionResult(c.Context(), shared.TenantID(c), shared.UserID(c), shared.Permissions(c), sessionID)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "release result failed", err)
+	}
+	return response.OK(c, out)
+}
+
 func (h Handler) ManualScore(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -88,7 +129,7 @@ func (h Handler) ManualScore(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid payload", err)
 	}
-	out, err := h.service.ManualScore(c.Context(), shared.TenantID(c), id, shared.UserID(c), req)
+	out, err := h.service.ManualScore(c.Context(), shared.TenantID(c), id, shared.UserID(c), shared.Permissions(c), req)
 	if err != nil {
 		return response.Error(c, fiber.StatusUnprocessableEntity, "manual grading failed", err)
 	}

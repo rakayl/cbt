@@ -29,6 +29,26 @@ func (h Handler) StudentExams(c *fiber.Ctx) error {
 	return response.OK(c, out)
 }
 
+func (h Handler) Rankings(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid exam id", nil)
+	}
+	var classID uuid.UUID
+	if rawClassID := c.Query("class_id"); rawClassID != "" {
+		classID, err = uuid.Parse(rawClassID)
+		if err != nil {
+			return response.Error(c, fiber.StatusBadRequest, "invalid class id", nil)
+		}
+	}
+	q := pagination.New(c.Query("page"), c.Query("limit"), c.Query("search"), c.Query("sort"))
+	out, err := h.service.Rankings(c.Context(), shared.TenantID(c), id, shared.UserID(c), shared.Permissions(c), q, classID)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot load exam rankings", err)
+	}
+	return response.OK(c, out)
+}
+
 func (h Handler) Get(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -76,6 +96,34 @@ func (h Handler) ListInvites(c *fiber.Ctx) error {
 	out, err := h.service.ListInvites(c.Context(), shared.TenantID(c), id, shared.UserID(c), shared.Permissions(c))
 	if err != nil {
 		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot load invites", err)
+	}
+	return response.OK(c, out)
+}
+
+func (h Handler) InviteRoster(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid exam id", nil)
+	}
+	out, err := h.service.InviteRoster(c.Context(), shared.TenantID(c), id, shared.UserID(c), shared.Permissions(c))
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot load invite roster", err)
+	}
+	return response.OK(c, out)
+}
+
+func (h Handler) UpdateAccessStatus(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid exam id", nil)
+	}
+	var req UpdateExamAccessRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid payload", err)
+	}
+	out, err := h.service.UpdateAccessStatus(c.Context(), shared.TenantID(c), id, shared.UserID(c), shared.Permissions(c), req)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "cannot update exam access status", err)
 	}
 	return response.OK(c, out)
 }

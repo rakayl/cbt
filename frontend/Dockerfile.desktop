@@ -1,0 +1,12 @@
+FROM electronuserland/builder:wine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY . .
+
+ENV VITE_APP_PLATFORM=desktop
+
+CMD ["sh", "-lc", "rm -rf /tmp/cbt-desktop-release && npm run build:desktop && npx electron-builder --win --x64 --config.directories.output=/tmp/cbt-desktop-release && mkdir -p /app/release && cp -f /tmp/cbt-desktop-release/*.exe /app/release/ && cp -f /tmp/cbt-desktop-release/*.blockmap /app/release/ && cp -f /tmp/cbt-desktop-release/builder-*.yml /app/release/ 2>/dev/null || true"]

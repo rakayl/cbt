@@ -68,6 +68,8 @@ type StudentResultQuestionView struct {
 	Position          int              `json:"position"`
 	Code              string           `json:"code"`
 	Text              string           `json:"text"`
+	QuestionTagID     string           `json:"question_tag_id,omitempty"`
+	QuestionTagName   string           `json:"question_tag_name,omitempty"`
 	QuestionType      string           `json:"question_type"`
 	AnswerMode        string           `json:"answer_mode"`
 	Media             []ExamMediaView  `json:"media,omitempty"`
@@ -112,6 +114,8 @@ type ExamQuestionView struct {
 	Position          int              `json:"position"`
 	Code              string           `json:"code"`
 	Text              string           `json:"text"`
+	QuestionTagID     string           `json:"question_tag_id,omitempty"`
+	QuestionTagName   string           `json:"question_tag_name,omitempty"`
 	QuestionType      string           `json:"question_type"`
 	AnswerMode        string           `json:"answer_mode"`
 	Media             []ExamMediaView  `json:"media,omitempty"`

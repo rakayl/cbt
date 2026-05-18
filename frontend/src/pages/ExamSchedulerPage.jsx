@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, CheckCircle2, Copy, PlayCircle, Plus, RefreshCcw, Share2, Tag, Trash2, UserPlus, X } from 'lucide-react';
+import { CalendarClock, CheckCircle2, Copy, Lock, PlayCircle, Plus, RefreshCcw, Share2, Tag, Trash2, Trophy, UserPlus, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { getApiErrorDetail, getApiErrorMessage } from '../lib/apiError';
 
@@ -24,6 +25,8 @@ const initialForm = {
   webcam_required: true,
   snapshot_interval_seconds: 60,
   critical_score_threshold: 90,
+  result_visibility: 'immediate',
+  result_release_at: '',
   instruction: '',
 };
 
@@ -124,6 +127,13 @@ export default function ExamSchedulerPage() {
       queryClient.invalidateQueries({ queryKey: ['student-exams'] });
     },
   });
+  const updateAccess = useMutation({
+    mutationFn: async ({ exam, accessStatus }) => (await api.put(`/exams/${exam.id}/access-status`, { access_status: accessStatus })).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      queryClient.invalidateQueries({ queryKey: ['student-exams'] });
+    },
+  });
 
   function updateField(name, value) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -167,7 +177,8 @@ export default function ExamSchedulerPage() {
     shareCode.error ||
     deleteDraft.error ||
     createRevision.error ||
-    inviteStudents.error;
+    inviteStudents.error ||
+    updateAccess.error;
 
   function handleDeleteDraft(exam) {
     const ok = window.confirm(`Hapus draft ujian "${exam.name}"?`);
@@ -474,6 +485,23 @@ export default function ExamSchedulerPage() {
                 onChange={(event) => updateField('instruction', event.target.value)}
               />
             </Field>
+            <div className="rounded-lg border border-[#eff2f5] bg-[#f9fafb] p-4">
+              <div className="text-sm font-extrabold text-[#181c32]">Pengaturan Hasil Siswa</div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 2xl:grid-cols-1">
+                <Field label="Visibilitas Nilai">
+                  <select className="input bg-white" value={form.result_visibility} onChange={(event) => updateField('result_visibility', event.target.value)}>
+                    <option value="immediate">Nilai langsung tampil</option>
+                    <option value="hidden">Sembunyikan dari siswa</option>
+                    <option value="manual_release">Tampil setelah dirilis guru/admin</option>
+                    <option value="after_date">Tampil setelah tanggal tertentu</option>
+                  </select>
+                </Field>
+                <Field label="Tanggal Rilis">
+                  <input className="input bg-white" type="datetime-local" disabled={form.result_visibility !== 'after_date'} value={form.result_release_at} onChange={(event) => updateField('result_release_at', event.target.value)} />
+                </Field>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-[#7e8299]">Isi soal, opsi, jawaban siswa, dan kunci tetap tidak tampil di akun siswa untuk menjaga keamanan bank soal.</p>
+            </div>
             {currentError ? (
               <div className="rounded-lg bg-[#fff5f8] px-4 py-3 text-sm font-bold text-[#f1416c]">
                 <div>{getApiErrorMessage(currentError)}</div>
@@ -511,6 +539,7 @@ export default function ExamSchedulerPage() {
                   <th className="px-5 py-4">Kode</th>
                   <th className="px-5 py-4">Nama</th>
                   <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4">Akses</th>
                   <th className="px-5 py-4">Durasi</th>
                   <th className="px-5 py-4">Soal</th>
                   <th className="px-5 py-4">Token</th>
@@ -520,7 +549,7 @@ export default function ExamSchedulerPage() {
               <tbody className="divide-y divide-[#eff2f5]">
                 {exams.isLoading ? (
                   <tr>
-                    <td className="px-5 py-10 text-center font-semibold text-[#7e8299]" colSpan={7}>Memuat jadwal ujian...</td>
+                    <td className="px-5 py-10 text-center font-semibold text-[#7e8299]" colSpan={8}>Memuat jadwal ujian...</td>
                   </tr>
                 ) : null}
                 {exams.data?.items?.map((exam) => {
@@ -534,6 +563,9 @@ export default function ExamSchedulerPage() {
                       </td>
                       <td className="px-5 py-4">
                         <StatusBadge status={exam.status} />
+                      </td>
+                      <td className="px-5 py-4">
+                        <AccessBadge status={accessStatusOf(exam)} />
                       </td>
                     <td className="px-5 py-4 font-semibold text-[#7e8299]">{exam.metadata?.duration_minutes || 120} menit</td>
                     <td className="px-5 py-4 font-semibold text-[#7e8299]">
@@ -570,6 +602,20 @@ export default function ExamSchedulerPage() {
                             <button
                               className="btn btn-ghost"
                               type="button"
+                              disabled={updateAccess.isPending}
+                              onClick={() => updateAccess.mutate({ exam, accessStatus: accessStatusOf(exam) === 'open' ? 'closed' : 'open' })}
+                            >
+                              {accessStatusOf(exam) === 'open' ? <Lock size={16} /> : <CheckCircle2 size={16} />}
+                              {accessStatusOf(exam) === 'open' ? 'Close' : 'Open'}
+                            </button>
+                          ) : null}
+                          <Link className="btn btn-ghost" to={`/exams/${exam.id}`}>
+                            Detail
+                          </Link>
+                          {exam.status === 'published' ? (
+                            <button
+                              className="btn btn-ghost"
+                              type="button"
                               disabled={createRevision.isPending}
                               onClick={() => handleCreateRevision(exam)}
                             >
@@ -588,6 +634,10 @@ export default function ExamSchedulerPage() {
                               <Trash2 size={16} />
                             </button>
                           ) : null}
+                          <Link className="btn btn-ghost" to={`/exam-rankings?exam_id=${exam.id}`}>
+                            <Trophy size={16} />
+                            Ranking
+                          </Link>
                           <button
                             className="btn btn-ghost"
                             type="button"
@@ -609,7 +659,7 @@ export default function ExamSchedulerPage() {
                 })}
                 {!exams.isLoading && exams.data?.items?.length === 0 ? (
                   <tr>
-                    <td className="px-5 py-12 text-center font-semibold text-[#7e8299]" colSpan={7}>
+                    <td className="px-5 py-12 text-center font-semibold text-[#7e8299]" colSpan={8}>
                       Belum ada exam.
                     </td>
                   </tr>
@@ -653,6 +703,19 @@ function StatusBadge({ status }) {
       {status || 'draft'}
     </span>
   );
+}
+
+function AccessBadge({ status }) {
+  const open = status === 'open';
+  return (
+    <span className={open ? 'inline-flex rounded-md bg-[#e8fff3] px-2.5 py-1 text-xs font-extrabold capitalize text-[#50cd89]' : 'inline-flex rounded-md bg-[#fff5f8] px-2.5 py-1 text-xs font-extrabold capitalize text-[#f1416c]'}>
+      {open ? 'Open' : 'Close'}
+    </span>
+  );
+}
+
+function accessStatusOf(exam) {
+  return exam?.metadata?.access_status === 'closed' ? 'closed' : 'open';
 }
 
 function TagSelect2({ tags, value, onChange }) {
@@ -742,6 +805,8 @@ function toExamPayload(values) {
     max_attempt: Number(values.max_attempt) || 1,
     random_question: values.random_question,
     random_option: values.random_option,
+    result_visibility: values.result_visibility || 'immediate',
+    result_release_at: values.result_release_at || '',
     instruction: values.instruction || '',
     metadata: {
       scheduled_at: values.scheduled_at || '',
@@ -761,6 +826,8 @@ function toPublishPayload(values) {
     max_attempt: Number(values.max_attempt) || 1,
     random_question: values.random_question,
     random_option: values.random_option,
+    result_visibility: values.result_visibility || 'immediate',
+    result_release_at: values.result_release_at || '',
     metadata: {
       recovery_policy: recoveryPolicyPayload(values),
       anti_cheat_policy: antiCheatPolicyPayload(values),
@@ -779,6 +846,8 @@ function toPublishPayloadFromExam(exam) {
     max_attempt: Number(exam.metadata?.max_attempt) || 1,
     random_question: exam.metadata?.random_question ?? true,
     random_option: exam.metadata?.random_option ?? true,
+    result_visibility: exam.metadata?.result_policy?.visibility || 'immediate',
+    result_release_at: exam.metadata?.result_policy?.release_at || '',
     metadata: {
       recovery_policy: exam.metadata?.recovery_policy || recoveryPolicyPayload(initialForm),
       anti_cheat_policy: exam.metadata?.anti_cheat_policy || antiCheatPolicyPayload(initialForm),

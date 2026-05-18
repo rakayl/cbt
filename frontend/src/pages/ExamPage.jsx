@@ -35,6 +35,13 @@ export default function ExamPage() {
   const tenantId = useAuthStore((state) => state.tenantId);
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${accessToken}`, 'X-Tenant-ID': tenantId || '' }), [accessToken, tenantId]);
 
+  useEffect(() => {
+    window.desktopApp?.enterExamMode?.();
+    return () => {
+      window.desktopApp?.exitExamMode?.();
+    };
+  }, []);
+
   const examQuery = useQuery({
     queryKey: ['exam-session-questions', sessionId],
     enabled: Boolean(sessionId && accessToken),
@@ -479,7 +486,10 @@ export default function ExamPage() {
       <section className="p-6 grid md:grid-cols-[1fr_280px] gap-4">
         <article className="panel p-5 min-h-96">
           <div className="flex items-center justify-between gap-3">
-            <h1 className="font-bold text-xl">Question {currentQuestion?.position || selectedIndex + 1}</h1>
+            <h1 className="font-bold text-xl">
+              Question {currentQuestion?.position || selectedIndex + 1}
+              {currentQuestion?.question_tag_name ? <span className="text-[#7e8299]"> -- {currentQuestion.question_tag_name}</span> : null}
+            </h1>
             <button className="btn btn-ghost" onClick={() => document.documentElement.requestFullscreen?.()}>
               <Maximize2 size={18} /> Fullscreen
             </button>
@@ -678,9 +688,16 @@ function ExamSecureImage({ media, compact }) {
   if (!src) {
     return <div className={compact ? 'grid h-28 place-items-center rounded-lg bg-[#f5f8fa] text-xs text-[#a1a5b7]' : 'grid h-56 place-items-center rounded-lg bg-[#f5f8fa] text-sm text-[#a1a5b7]'}>Memuat gambar...</div>;
   }
+  if (compact) {
+    return (
+      <span className="block overflow-hidden rounded-lg border border-line bg-[#f5f8fa]">
+        <img className="h-32 w-full object-contain" src={src} alt="Media opsi jawaban" />
+      </span>
+    );
+  }
   return (
     <a href={src} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-line bg-[#f5f8fa]">
-      <img className={compact ? 'h-32 w-full object-contain' : 'h-72 w-full object-contain'} src={src} alt="Media soal" />
+      <img className="h-72 w-full object-contain" src={src} alt="Media soal" />
     </a>
   );
 }

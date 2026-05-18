@@ -77,6 +77,7 @@ func (s *service) StartExam(ctx context.Context, tenantID, userID uuid.UUID, req
 
 	var examName string
 	var examMetadataRaw []byte
+	var accessStatus string
 	var durationMinutes, questionLimit int
 	var randomQuestion, randomOption bool
 	err = tx.QueryRow(ctx, `
@@ -85,10 +86,11 @@ func (s *service) StartExam(ctx context.Context, tenantID, userID uuid.UUID, req
 		       random_question,
 		       random_option,
 		       CASE WHEN metadata->>'question_count' ~ '^[0-9]+$' THEN (metadata->>'question_count')::int ELSE 40 END,
-		       COALESCE(metadata,'{}'::jsonb)
+		       COALESCE(metadata,'{}'::jsonb),
+		       COALESCE(NULLIF(metadata->>'access_status',''), 'open')
 		FROM exams
 		WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND status IN ('active','published')`,
-		req.ExamID, tenantID).Scan(&examName, &durationMinutes, &randomQuestion, &randomOption, &questionLimit, &examMetadataRaw)
+		req.ExamID, tenantID).Scan(&examName, &durationMinutes, &randomQuestion, &randomOption, &questionLimit, &examMetadataRaw, &accessStatus)
 	if err != nil {
 		return ExamSessionState{}, err
 	}
@@ -132,6 +134,9 @@ func (s *service) StartExam(ctx context.Context, tenantID, userID uuid.UUID, req
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return ExamSessionState{}, err
 	}
+	if strings.EqualFold(strings.TrimSpace(accessStatus), "closed") || strings.EqualFold(strings.TrimSpace(accessStatus), "close") {
+		return ExamSessionState{}, errors.New("ujian sedang ditutup oleh guru/admin")
+	}
 
 	now := time.Now().UTC()
 	endsAt := now.Add(time.Duration(durationMinutes) * time.Minute)
@@ -155,28 +160,33 @@ func (s *service) StartExam(ctx context.Context, tenantID, userID uuid.UUID, req
 	if randomQuestion {
 		orderBy = "random()"
 	}
-	questionIDs, err := s.selectExamQuestions(ctx, tx, tenantID, req.ExamID, questionLimit, orderBy)
+	selectedQuestions, err := s.selectExamQuestions(ctx, tx, tenantID, req.ExamID, questionLimit, orderBy)
 	if err != nil {
 		return ExamSessionState{}, err
 	}
 
 	position := 0
-	for _, questionID := range questionIDs {
+	for _, selectedQuestion := range selectedQuestions {
 		position++
-		optionOrder, err := s.optionOrder(ctx, questionID, randomOption)
+		optionOrder, err := s.optionOrder(ctx, selectedQuestion.QuestionID, randomOption)
 		if err != nil {
 			return ExamSessionState{}, err
 		}
-		snapshot, err := s.buildQuestionSnapshot(ctx, tx, tenantID, questionID, optionOrder)
+		snapshot, err := s.buildQuestionSnapshot(ctx, tx, tenantID, selectedQuestion.QuestionID, optionOrder)
 		if err != nil {
 			return ExamSessionState{}, err
 		}
 		rawOrder, _ := json.Marshal(optionOrder)
-		rawMetadata, _ := json.Marshal(map[string]any{"snapshot": snapshot, "snapshot_version": 1})
+		rawMetadata, _ := json.Marshal(map[string]any{
+			"snapshot":          snapshot,
+			"snapshot_version":  1,
+			"question_tag_id":   selectedQuestion.QuestionTagID.String(),
+			"question_tag_name": selectedQuestion.QuestionTagName,
+		})
 		_, err = tx.Exec(ctx, `
 			INSERT INTO exam_session_questions(id,tenant_id,code,name,status,metadata,exam_session_id,question_id,position,option_order)
 			VALUES($1,$2,$3,$4,'active',$5,$6,$7,$8,$9)`,
-			uuid.New(), tenantID, fmt.Sprintf("Q-%03d", position), fmt.Sprintf("Question %d", position), rawMetadata, sessionID, questionID, position, rawOrder)
+			uuid.New(), tenantID, fmt.Sprintf("Q-%03d", position), fmt.Sprintf("Question %d", position), rawMetadata, sessionID, selectedQuestion.QuestionID, position, rawOrder)
 		if err != nil {
 			return ExamSessionState{}, err
 		}
@@ -195,8 +205,15 @@ func (s *service) StartExam(ctx context.Context, tenantID, userID uuid.UUID, req
 }
 
 type examQuestionTagPool struct {
-	QuestionTagID uuid.UUID
-	QuestionCount int
+	QuestionTagID   uuid.UUID
+	QuestionTagName string
+	QuestionCount   int
+}
+
+type selectedExamQuestion struct {
+	QuestionID      uuid.UUID
+	QuestionTagID   uuid.UUID
+	QuestionTagName string
 }
 
 type questionSnapshot struct {
@@ -279,6 +296,18 @@ func snapshotFromMetadata(raw []byte) (questionSnapshot, bool) {
 		return questionSnapshot{}, false
 	}
 	return snapshot, snapshot.QuestionID != uuid.Nil
+}
+
+func questionTagFromMetadata(raw []byte) (string, string) {
+	metadata := map[string]any{}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return "", ""
+	}
+	tagID := stringFromAny(metadata["question_tag_id"], "")
+	if tagID == uuid.Nil.String() {
+		tagID = ""
+	}
+	return tagID, stringFromAny(metadata["question_tag_name"], "")
 }
 
 func (s *service) buildQuestionSnapshot(ctx context.Context, tx pgx.Tx, tenantID, questionID uuid.UUID, optionOrder []uuid.UUID) (questionSnapshot, error) {
@@ -389,7 +418,7 @@ func (s *service) snapshotMedia(ctx context.Context, tx pgx.Tx, tenantID, questi
 	return out, rows.Err()
 }
 
-func (s *service) selectExamQuestions(ctx context.Context, tx pgx.Tx, tenantID, examID uuid.UUID, questionLimit int, orderBy string) ([]uuid.UUID, error) {
+func (s *service) selectExamQuestions(ctx context.Context, tx pgx.Tx, tenantID, examID uuid.UUID, questionLimit int, orderBy string) ([]selectedExamQuestion, error) {
 	pools, err := s.examQuestionTagPools(ctx, tx, tenantID, examID)
 	if err != nil {
 		return nil, err
@@ -416,27 +445,28 @@ func (s *service) selectExamQuestions(ctx context.Context, tx pgx.Tx, tenantID, 
 	}
 	defer rows.Close()
 
-	questionIDs := []uuid.UUID{}
+	questionIDs := []selectedExamQuestion{}
 	for rows.Next() {
 		var questionID uuid.UUID
 		if err := rows.Scan(&questionID); err != nil {
 			return nil, err
 		}
-		questionIDs = append(questionIDs, questionID)
+		questionIDs = append(questionIDs, selectedExamQuestion{QuestionID: questionID})
 	}
 	return questionIDs, rows.Err()
 }
 
 func (s *service) examQuestionTagPools(ctx context.Context, tx pgx.Tx, tenantID, examID uuid.UUID) ([]examQuestionTagPool, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT question_tag_id, question_count
-		FROM exam_question_pools
-		WHERE tenant_id=$1
-		  AND exam_id=$2
-		  AND deleted_at IS NULL
-		  AND question_tag_id IS NOT NULL
-		  AND question_count > 0
-		ORDER BY created_at ASC`, tenantID, examID)
+		SELECT eqp.question_tag_id, COALESCE(qt.name, ''), eqp.question_count
+		FROM exam_question_pools eqp
+		LEFT JOIN question_tags qt ON qt.id=eqp.question_tag_id AND qt.tenant_id=eqp.tenant_id AND qt.deleted_at IS NULL
+		WHERE eqp.tenant_id=$1
+		  AND eqp.exam_id=$2
+		  AND eqp.deleted_at IS NULL
+		  AND eqp.question_tag_id IS NOT NULL
+		  AND eqp.question_count > 0
+		ORDER BY eqp.created_at ASC, eqp.id ASC`, tenantID, examID)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +475,7 @@ func (s *service) examQuestionTagPools(ctx context.Context, tx pgx.Tx, tenantID,
 	pools := []examQuestionTagPool{}
 	for rows.Next() {
 		var pool examQuestionTagPool
-		if err := rows.Scan(&pool.QuestionTagID, &pool.QuestionCount); err != nil {
+		if err := rows.Scan(&pool.QuestionTagID, &pool.QuestionTagName, &pool.QuestionCount); err != nil {
 			return nil, err
 		}
 		pools = append(pools, pool)
@@ -453,8 +483,8 @@ func (s *service) examQuestionTagPools(ctx context.Context, tx pgx.Tx, tenantID,
 	return pools, rows.Err()
 }
 
-func (s *service) selectExamQuestionsByTagPools(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, pools []examQuestionTagPool, orderBy string) ([]uuid.UUID, error) {
-	questionIDs := []uuid.UUID{}
+func (s *service) selectExamQuestionsByTagPools(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, pools []examQuestionTagPool, orderBy string) ([]selectedExamQuestion, error) {
+	questionIDs := []selectedExamQuestion{}
 	used := map[uuid.UUID]bool{}
 	for _, pool := range pools {
 		rows, err := tx.Query(ctx, fmt.Sprintf(`
@@ -481,7 +511,11 @@ func (s *service) selectExamQuestionsByTagPools(ctx context.Context, tx pgx.Tx, 
 				continue
 			}
 			used[questionID] = true
-			questionIDs = append(questionIDs, questionID)
+			questionIDs = append(questionIDs, selectedExamQuestion{
+				QuestionID:      questionID,
+				QuestionTagID:   pool.QuestionTagID,
+				QuestionTagName: pool.QuestionTagName,
+			})
 			selectedForPool++
 			if selectedForPool >= pool.QuestionCount {
 				break
@@ -588,6 +622,7 @@ func (s *service) SessionQuestions(ctx context.Context, tenantID, userID, sessio
 			qr.item.Media = snapshot.Media.withURLs()
 			qr.item.Options = snapshot.examOptions()
 		}
+		qr.item.QuestionTagID, qr.item.QuestionTagName = questionTagFromMetadata(rawMetadata)
 		questionRows = append(questionRows, qr)
 	}
 	rows.Close()
@@ -836,12 +871,13 @@ func (s *service) submitSession(ctx context.Context, tenantID, sessionID uuid.UU
 	var status string
 	var passingGrade float64
 	var submittedAt *time.Time
+	var rawExamMetadata []byte
 	err = tx.QueryRow(ctx, `
-		SELECT es.status_enum::text, es.submitted_at, COALESCE(e.passing_grade,60)
+		SELECT es.status_enum::text, es.submitted_at, COALESCE(e.passing_grade,60), COALESCE(e.metadata,'{}'::jsonb)
 		FROM exam_sessions es
 		JOIN exams e ON e.id=es.exam_id AND e.deleted_at IS NULL
 		WHERE es.id=$1 AND es.tenant_id=$2 AND es.deleted_at IS NULL
-		FOR UPDATE OF es`, sessionID, tenantID).Scan(&status, &submittedAt, &passingGrade)
+		FOR UPDATE OF es`, sessionID, tenantID).Scan(&status, &submittedAt, &passingGrade, &rawExamMetadata)
 	if err != nil {
 		return SubmitExamResponse{}, err
 	}
@@ -884,6 +920,11 @@ func (s *service) submitSession(ctx context.Context, tenantID, sessionID uuid.UU
 		"auto_submitted":   auto,
 		"client_seq":       clientSeq,
 		"graded_at":        now.Format(time.RFC3339Nano),
+	}
+	examMetadata := map[string]any{}
+	_ = json.Unmarshal(rawExamMetadata, &examMetadata)
+	if policy := mapFromAny(examMetadata["result_policy"]); len(policy) > 0 {
+		meta["result_policy"] = policy
 	}
 	meta["result_integrity_hash"] = resultIntegrityHash(sessionID, summary, auto, clientSeq)
 	rawMeta, _ := json.Marshal(meta)

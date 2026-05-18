@@ -104,7 +104,10 @@ export default function StudentExamsPage() {
                   <div className="font-extrabold text-[#181c32]">{exam.name}</div>
                   <div className="mt-1 text-sm font-semibold text-[#a1a5b7]">{exam.code}</div>
                 </div>
-                <StatusBadge status={exam.session_status || exam.status} />
+                <div className="flex flex-col items-end gap-2">
+                  <StatusBadge status={exam.session_status || exam.status} />
+                  <AccessBadge status={accessStatusOf(exam)} />
+                </div>
               </div>
               <div className="mt-4 grid gap-3 text-sm font-semibold text-[#7e8299] sm:grid-cols-4">
                 <div>Durasi: {exam.duration_minutes} menit</div>
@@ -113,7 +116,12 @@ export default function StudentExamsPage() {
                 <div>Attempt: {exam.max_attempt}</div>
               </div>
               {exam.instruction ? <p className="mt-4 text-sm leading-6 text-[#7e8299]">{exam.instruction}</p> : null}
-              <button className="btn btn-primary mt-5 w-full justify-center" disabled={startExam.isPending || exam.session_status === 'completed'} onClick={() => startExam.mutate(exam)}>
+              {accessStatusOf(exam) === 'closed' && !['started', 'reconnecting'].includes(exam.session_status) ? (
+                <div className="mt-5 rounded-lg bg-[#fff5f8] px-4 py-3 text-sm font-bold text-[#f1416c]">
+                  Ujian sedang ditutup oleh guru/admin.
+                </div>
+              ) : null}
+              <button className="btn btn-primary mt-5 w-full justify-center" disabled={startExam.isPending || exam.session_status === 'completed' || (accessStatusOf(exam) === 'closed' && !['started', 'reconnecting'].includes(exam.session_status))} onClick={() => startExam.mutate(exam)}>
                 <PlayCircle size={17} />
                 {exam.session_id && exam.session_status !== 'completed' ? 'Lanjutkan Ujian' : exam.session_status === 'completed' ? 'Sudah Selesai' : 'Mulai Ujian'}
               </button>
@@ -156,4 +164,17 @@ function StatusBadge({ status }) {
       {status || 'published'}
     </span>
   );
+}
+
+function AccessBadge({ status }) {
+  const open = status === 'open';
+  return (
+    <span className={open ? 'inline-flex rounded-md bg-[#e8fff3] px-2.5 py-1 text-xs font-extrabold text-[#50cd89]' : 'inline-flex rounded-md bg-[#fff5f8] px-2.5 py-1 text-xs font-extrabold text-[#f1416c]'}>
+      {open ? 'Open' : 'Close'}
+    </span>
+  );
+}
+
+function accessStatusOf(exam) {
+  return exam?.metadata?.access_status === 'closed' ? 'closed' : 'open';
 }

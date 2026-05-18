@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { GraduationCap, LibraryBig, Users, UserRound } from 'lucide-react';
 import './styles.css';
 import { useAuthStore } from './stores/authStore';
@@ -16,6 +16,7 @@ import DashboardPage from './pages/DashboardPage';
 import QuestionBanksPage from './pages/QuestionBanksPage';
 import QuestionsPage from './pages/QuestionsPage';
 import ExamSchedulerPage from './pages/ExamSchedulerPage';
+import ExamDetailPage from './pages/ExamDetailPage';
 import ExamPage from './pages/ExamPage';
 import StudentClassesPage from './pages/StudentClassesPage';
 import StudentExamsPage from './pages/StudentExamsPage';
@@ -23,11 +24,14 @@ import StudentHistoryPage from './pages/StudentHistoryPage';
 import StudentResultDetailPage from './pages/StudentResultDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import MonitoringPage from './pages/MonitoringPage';
+import ExamReviewPage from './pages/ExamReviewPage';
+import ExamRankingsPage from './pages/ExamRankingsPage';
 import ReportsPage from './pages/ReportsPage';
 import RbacPage from './pages/RbacPage';
 import BillingPage from './pages/BillingPage';
 import UsersPage from './pages/UsersPage';
 const queryClient = new QueryClient({ defaultOptions:{ queries:{ staleTime:30000, retry:1 } } });
+const Router = import.meta.env.VITE_APP_PLATFORM === 'desktop' ? HashRouter : BrowserRouter;
 const academicPages = {
   students: {
     resource: 'students',
@@ -107,5 +111,5 @@ const academicPages = {
   },
 };
 
-function App(){ const hydrate=useAuthStore(s=>s.hydrate); useEffect(()=>{hydrate(); if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});},[hydrate]); return <QueryClientProvider client={queryClient}><BrowserRouter><PageTitle/><Routes><Route path="/login" element={<LoginPage/>}/><Route path="/register" element={<RegisterPage/>}/><Route path="/exam/:sessionId" element={<ProtectedRoute><ExamPage/></ProtectedRoute>}/><Route path="/" element={<ProtectedRoute><AppShell/></ProtectedRoute>}><Route index element={<DashboardPage/>}/><Route path="student/exams" element={<StudentExamsPage/>}/><Route path="student/history" element={<StudentHistoryPage/>}/><Route path="student/history/:sessionId" element={<StudentResultDetailPage/>}/><Route path="student/classes" element={<StudentClassesPage/>}/><Route path="academic/programs" element={<AcademicResourcePage config={academicPages.programs}/>}/><Route path="academic/classes" element={<AcademicResourcePage config={academicPages.classes}/>}/><Route path="academic/enrollment" element={<EnrollmentPage/>}/><Route path="academic/students" element={<AcademicResourcePage config={academicPages.students}/>}/><Route path="academic/lecturers" element={<AcademicResourcePage config={academicPages.lecturers}/>}/><Route path="academic/courses" element={<AcademicResourcePage config={academicPages.courses}/>}/><Route path="question-banks" element={<QuestionBanksPage/>}/><Route path="questions" element={<QuestionsPage/>}/><Route path="exams" element={<ExamSchedulerPage/>}/><Route path="analytics" element={<AnalyticsPage/>}/><Route path="monitoring" element={<MonitoringPage/>}/><Route path="reports" element={<ReportsPage/>}/><Route path="rbac" element={<RbacPage/>}/><Route path="billing" element={<BillingPage/>}/><Route path="users" element={<UsersPage/>}/></Route><Route path="*" element={<Navigate to="/"/>}/></Routes></BrowserRouter></QueryClientProvider> }
+function App(){ const hydrate=useAuthStore(s=>s.hydrate); useEffect(()=>{hydrate(); if(import.meta.env.VITE_APP_PLATFORM !== 'desktop' && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});},[hydrate]); return <QueryClientProvider client={queryClient}><Router><PageTitle/><Routes><Route path="/login" element={<LoginPage/>}/><Route path="/register" element={<RegisterPage/>}/><Route path="/exam/:sessionId" element={<ProtectedRoute><ExamPage/></ProtectedRoute>}/><Route path="/" element={<ProtectedRoute><AppShell/></ProtectedRoute>}><Route index element={<DashboardPage/>}/><Route path="student/exams" element={<StudentExamsPage/>}/><Route path="student/history" element={<StudentHistoryPage/>}/><Route path="student/history/:sessionId" element={<StudentResultDetailPage/>}/><Route path="student/classes" element={<StudentClassesPage/>}/><Route path="academic/programs" element={<AcademicResourcePage config={academicPages.programs}/>}/><Route path="academic/classes" element={<AcademicResourcePage config={academicPages.classes}/>}/><Route path="academic/enrollment" element={<EnrollmentPage/>}/><Route path="academic/students" element={<AcademicResourcePage config={academicPages.students}/>}/><Route path="academic/lecturers" element={<AcademicResourcePage config={academicPages.lecturers}/>}/><Route path="academic/courses" element={<AcademicResourcePage config={academicPages.courses}/>}/><Route path="question-banks" element={<QuestionBanksPage/>}/><Route path="questions" element={<QuestionsPage/>}/><Route path="exams" element={<ExamSchedulerPage/>}/><Route path="exams/:examId" element={<ExamDetailPage/>}/><Route path="analytics" element={<AnalyticsPage/>}/><Route path="monitoring" element={<MonitoringPage/>}/><Route path="grading-review" element={<ExamReviewPage/>}/><Route path="exam-rankings" element={<ExamRankingsPage/>}/><Route path="reports" element={<ReportsPage/>}/><Route path="rbac" element={<RbacPage/>}/><Route path="billing" element={<BillingPage/>}/><Route path="users" element={<UsersPage/>}/></Route><Route path="*" element={<Navigate to="/"/>}/></Routes></Router></QueryClientProvider> }
 createRoot(document.getElementById('root')).render(<App/>);

@@ -1,1 +1,70 @@
-{"name":"enterprise-cbt-frontend","private":true,"version":"1.0.0","type":"module","scripts":{"dev":"vite --host 0.0.0.0","build":"vite build","preview":"vite preview --host 0.0.0.0","lint":"eslint ."},"dependencies":{"@hookform/resolvers":"latest","@tanstack/react-query":"latest","axios":"latest","clsx":"latest","lucide-react":"latest","react":"latest","react-dom":"latest","react-hook-form":"latest","react-router-dom":"latest","zod":"latest","zustand":"latest"},"devDependencies":{"@vitejs/plugin-react":"latest","autoprefixer":"latest","eslint":"latest","postcss":"latest","tailwindcss":"3.4.17","vite":"latest"}}
+{
+  "name": "enterprise-cbt-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Enterprise CBT Kampus web and desktop frontend",
+  "author": "CBT Kampus",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "build:desktop": "vite build --mode desktop",
+    "preview": "vite preview --host 0.0.0.0",
+    "desktop:dev": "concurrently \"vite --host 0.0.0.0\" \"wait-on http://localhost:5173 && electron .\"",
+    "desktop:build": "npm run build:desktop && electron-builder --win --x64",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@hookform/resolvers": "latest",
+    "@tanstack/react-query": "latest",
+    "axios": "latest",
+    "clsx": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-hook-form": "latest",
+    "react-router-dom": "latest",
+    "zod": "latest",
+    "zustand": "latest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "latest",
+    "autoprefixer": "latest",
+    "concurrently": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "eslint": "latest",
+    "postcss": "latest",
+    "tailwindcss": "3.4.17",
+    "vite": "latest",
+    "wait-on": "latest"
+  },
+  "build": {
+    "appId": "id.ac.kampus.cbt",
+    "productName": "CBT Kampus",
+    "icon": "build/icon.ico",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.ico",
+      "public/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CBT Kampus"
+    }
+  }
+}
